@@ -28,11 +28,11 @@ Track per-component progress here. Update on every PR.
 | Component | Doc | Implementation | Tests | DoD |
 |---|---|---|---|---|
 | Upstream notes | ✅ | n/a | n/a | n/a |
-| `DongleService` | ✅ | ⏳ | ⏳ | ⏳ |
-| `FakeDongle` | ✅ | ⏳ | ⏳ | ⏳ |
-| `Settings` | ✅ | ⏳ | ⏳ | ⏳ |
-| App shell | ✅ | ⏳ | ⏳ | ⏳ |
-| CI gate | ✅ | ⏳ | n/a | ⏳ |
+| `DongleService` | ✅ | ✅ | ✅ | ✅ |
+| `FakeDongle` | ✅ | ✅ | ✅ | ✅ |
+| `Settings` | ✅ | ✅ | ✅ | ✅ |
+| App shell | ✅ | ✅ | ✅ | ✅ |
+| CI gate | ✅ | ✅ | n/a | ✅ |
 
 ✅ = done · 🚧 = in progress · ⏳ = not started · ⛔ = blocked
 
