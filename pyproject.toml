@@ -13,7 +13,7 @@ dependencies = [
 ]
 
 [project.scripts]
-enocean-tui = "enocean_async_tui.app:main"
+enocean-tui = "enocean_async_tui.cli:main"
 
 [build-system]
 requires = ["uv_build>=0.10.10,<0.11.0"]
@@ -33,6 +33,15 @@ dev = [
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+
+[tool.coverage.run]
+branch = true
+source = ["enocean_async_tui"]
+
+[tool.coverage.report]
+fail_under = 80
+show_missing = true
+skip_covered = false
 
 [tool.ruff]
 src = ["src"]
