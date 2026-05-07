@@ -17,7 +17,7 @@ LogLevel = Literal["DEBUG", "INFO", "WARNING", "ERROR"]
 _LOG_LEVELS: tuple[LogLevel, ...] = ("DEBUG", "INFO", "WARNING", "ERROR")
 _LOGGER = logging.getLogger(__name__)
 
-DEFAULT_PORT = "/dev/ttyUSB0"
+DEFAULT_PORT = "/dev/ttyUSB0"  # shown for reference; no longer used as a fallback in from_args
 DEFAULT_LOG_LEVEL: LogLevel = "INFO"
 DEFAULT_MAX_LINES = 10_000
 
@@ -30,7 +30,7 @@ class SettingsError(ValueError):
 
 @dataclass(frozen=True, slots=True)
 class Settings:
-    port: str
+    port: str | None  # None → auto-discover; set when --port or ENOCEAN_TUI_PORT is provided
     log_level: LogLevel
     fake: bool
     max_lines: int
@@ -64,7 +64,7 @@ class Settings:
         if fake and ns.port is not None:
             _LOGGER.warning("--port ignored because --fake was given")
 
-        port = ns.port or environ.get(f"{ENV_PREFIX}PORT") or DEFAULT_PORT
+        port: str | None = ns.port or environ.get(f"{ENV_PREFIX}PORT") or None
 
         log_level: LogLevel
         if ns.log_level is not None:

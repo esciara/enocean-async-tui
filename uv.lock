@@ -116,6 +116,7 @@ dev = [
     { name = "pytest-asyncio" },
     { name = "pytest-cov" },
     { name = "ruff" },
+    { name = "types-pyserial" },
 ]
 
 [package.metadata]
@@ -133,6 +134,7 @@ dev = [
     { name = "pytest-asyncio", specifier = ">=1.3.0" },
     { name = "pytest-cov", specifier = ">=7.1.0" },
     { name = "ruff", specifier = ">=0.15.11" },
+    { name = "types-pyserial", specifier = ">=3.5.0.20260408" },
 ]
 
 [[package]]
@@ -554,6 +556,15 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/c3/af/14b24e41977adb296d6bd1fb59402cf7d60ce364f90c890bd2ec65c43b5a/tomlkit-0.14.0.tar.gz", hash = "sha256:cf00efca415dbd57575befb1f6634c4f42d2d87dbba376128adb42c121b87064", size = 187167, upload-time = "2026-01-13T01:14:53.304Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/b5/11/87d6d29fb5d237229d67973a6c9e06e048f01cf4994dee194ab0ea841814/tomlkit-0.14.0-py3-none-any.whl", hash = "sha256:592064ed85b40fa213469f81ac584f67a4f2992509a7c3ea2d632208623a3680", size = 39310, upload-time = "2026-01-13T01:14:51.965Z" },
+]
+
+[[package]]
+name = "types-pyserial"
+version = "3.5.0.20260408"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/23/c7/75035cf4511e7e76e37eb54c7b960d184fbcad6f6b7118f9b4694167aba7/types_pyserial-3.5.0.20260408.tar.gz", hash = "sha256:8a8eb2bfcdc942a081ebf1e4c6d852683127b37c9cd2e8e17f00e2308e8e08cc", size = 20003, upload-time = "2026-04-08T04:31:43.047Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/20/e1/2336f416d9b7c00fc21a098df7838eec0199d4e4175402e553c2a867d637/types_pyserial-3.5.0.20260408-py3-none-any.whl", hash = "sha256:3c9d611de989de94748290c7de5b22f1dad295a9b96d6c371cc482c6a8485345", size = 25328, upload-time = "2026-04-08T04:31:42.175Z" },
 ]
 
 [[package]]

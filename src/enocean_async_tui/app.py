@@ -19,6 +19,7 @@ from enocean_async_tui.dongle import (
     FakeDongle,
     State,
 )
+from enocean_async_tui.dongle.autodiscovery import discover_dongles
 from enocean_async_tui.settings import Settings
 from enocean_async_tui.ui.screens.sniffer import SnifferScreen
 from enocean_async_tui.ui.workers.sniffer import SnifferWorker
@@ -50,8 +51,11 @@ class StatusHeader(Static):
 
     status: reactive[State] = reactive(State.IDLE)
     fake_mode: reactive[bool] = reactive(False)
+    scanning: reactive[bool] = reactive(False)
 
     def render(self) -> str:
+        if self.scanning:
+            return f"[b]{_TITLE}[/b] — [yellow]Scanning for dongles…[/yellow]"
         text = _STATUS_TEXT[self.status]
         style = _STATUS_STYLE[self.status]
         if self.fake_mode and self.status is State.CONNECTED:
@@ -67,12 +71,15 @@ class FallbackModal(ModalScreen[bool]):
         ("escape", "quit", "Quit"),
     ]
 
-    def __init__(self, port: str) -> None:
+    def __init__(self, port: str | None) -> None:
         super().__init__()
         self._port = port
 
     def compose(self) -> ComposeResult:
-        message = f"Couldn't open serial port {self._port}.\nContinue in fake-dongle mode for testing?"
+        if self._port:
+            message = f"Couldn't open serial port {self._port}.\nContinue in fake-dongle mode for testing?"
+        else:
+            message = "No EnOcean dongle found.\nContinue in fake-dongle mode for testing?"
         yield Vertical(
             Label("Dongle not available", id="modal-title"),
             Label(message, id="modal-body"),
@@ -94,6 +101,42 @@ class FallbackModal(ModalScreen[bool]):
 
     def action_quit(self) -> None:
         self.dismiss(False)
+
+
+class DongleSelectionModal(ModalScreen[str | None]):
+    """List discovered dongle ports; dismiss with the chosen port or None to quit."""
+
+    BINDINGS: ClassVar[list[Binding | tuple[str, str] | tuple[str, str, str]]] = [
+        ("escape", "quit", "Quit"),
+    ]
+
+    def __init__(self, ports: list[str]) -> None:
+        super().__init__()
+        self._ports = ports
+
+    def compose(self) -> ComposeResult:
+        port_buttons = [Button(p, id=f"port-{i}") for i, p in enumerate(self._ports)]
+        yield Vertical(
+            Label("Multiple EnOcean dongles found. Select one:", id="modal-title"),
+            *port_buttons,
+            Center(Button("Quit", id="modal-quit", variant="default")),
+            id="selection-modal",
+        )
+
+    def on_mount(self) -> None:
+        self.query_one("#port-0", Button).focus()
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "modal-quit":
+            self.dismiss(None)
+            return
+        for i, port in enumerate(self._ports):
+            if event.button.id == f"port-{i}":
+                self.dismiss(port)
+                return
+
+    def action_quit(self) -> None:
+        self.dismiss(None)
 
 
 class EnoceanTuiApp(App[int]):
@@ -134,24 +177,51 @@ class EnoceanTuiApp(App[int]):
         if self._dongle_factory is not None:
             dongle = self._dongle_factory()
             self._fake_mode = isinstance(dongle, FakeDongle)
+            await self._connect_and_start(dongle, self._settings.port)
+        elif self._settings.port is None:
+            await self._run_autodiscovery()
         else:
             dongle = DongleService(self._settings.port)
             self._fake_mode = False
+            await self._connect_and_start(dongle, self._settings.port)
 
+    async def _connect_and_start(self, dongle: Dongle, port: str | None) -> None:
         try:
             await dongle.connect()
         except ConnectionError:
             _LOGGER.warning("dongle: connect raised; offering fallback modal")
             await dongle.aclose()
-            await self._handle_fallback()
+            await self._handle_fallback(port)
             return
-
         self._dongle = dongle
         self._update_fake_suffix()
         self._start_workers(dongle)
 
-    async def _handle_fallback(self) -> None:
-        accepted = await self.push_screen_wait(FallbackModal(self._settings.port))
+    async def _run_autodiscovery(self) -> None:
+        header = self.query_one("#status-header", StatusHeader)
+        header.scanning = True
+        try:
+            ports = await discover_dongles()
+        finally:
+            header.scanning = False
+
+        if not ports:
+            await self._handle_fallback(None)
+        elif len(ports) == 1:
+            dongle = DongleService(ports[0])
+            self._fake_mode = False
+            await self._connect_and_start(dongle, ports[0])
+        else:
+            selected = await self.push_screen_wait(DongleSelectionModal(ports))
+            if selected is None:
+                self.exit(return_code=2)
+                return
+            dongle = DongleService(selected)
+            self._fake_mode = False
+            await self._connect_and_start(dongle, selected)
+
+    async def _handle_fallback(self, port: str | None) -> None:
+        accepted = await self.push_screen_wait(FallbackModal(port))
         if not accepted:
             self.exit(return_code=2)
             return

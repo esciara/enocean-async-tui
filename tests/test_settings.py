@@ -7,7 +7,7 @@ from enocean_async_tui.settings import Settings, SettingsError
 
 def test_defaults_when_no_args_and_empty_env() -> None:
     s = Settings.from_args([], env={})
-    assert s.port == "/dev/ttyUSB0"
+    assert s.port is None  # no port given → auto-discover
     assert s.log_level == "INFO"
 
 
@@ -51,7 +51,7 @@ def test_invalid_cli_log_level_systemexit() -> None:
 
 def test_empty_env_value_falls_back_to_default() -> None:
     s = Settings.from_args([], env={"ENOCEAN_TUI_PORT": "", "ENOCEAN_TUI_LOG_LEVEL": ""})
-    assert s.port == "/dev/ttyUSB0"
+    assert s.port is None  # empty env value → auto-discover
     assert s.log_level == "INFO"
 
 

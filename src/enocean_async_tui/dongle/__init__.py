@@ -1,5 +1,6 @@
-"""Dongle layer: protocol, types, real service, and in-memory fake."""
+"""Dongle layer: protocol, types, real service, in-memory fake, and discovery."""
 
+from enocean_async_tui.dongle.autodiscovery import discover_dongles
 from enocean_async_tui.dongle.fake import FakeDongle
 from enocean_async_tui.dongle.protocol import (
     Dongle,
@@ -18,4 +19,5 @@ __all__ = [
     "RawTelegram",
     "State",
     "StateChange",
+    "discover_dongles",
 ]
