@@ -1,7 +1,7 @@
 # Design: Phase 1 — Sniffer MVP
 
 **PRD:** `.prd-reviews/sniffer-mvp/prd-draft.md`
-**Status:** Alignment-reviewed (round 1: requirements + goals applied 2026-05-07; round 2: constraints + non-goals applied 2026-05-07; round 3: user-stories + open-questions applied 2026-05-07)
+**Status:** Alignment-reviewed (round 1: requirements + goals applied 2026-05-07; round 2: constraints + non-goals applied 2026-05-07; round 3: user-stories + open-questions applied 2026-05-07; completeness round 1: infrastructure + tests + error-handling applied 2026-05-07)
 
 ---
 
@@ -85,18 +85,21 @@ Posts `TelegramReceived(telegram: RawTelegram)` Textual messages to App.
 ```python
 @dataclass
 class FormattedTelegram:
-    timestamp: str     # ISO 8601 with ms: "2026-05-07T14:23:01.042"
-    sender_id: str     # "0xABCD1234"
-    rorg_name: str     # "RPS (0xF6)"
-    payload_hex: str   # full hex string, no 0x prefix
-    rssi_dbm: int      # e.g. -62
+    timestamp: str          # ISO 8601 with ms: "2026-05-07T14:23:01.042"
+    sender_id: str          # "0xABCD1234"
+    rorg_name: str          # "RPS (0xF6)"
+    payload_hex: str        # full hex string, no 0x prefix
+    rssi_dbm: int | None    # e.g. -62; None when dongle reports RSSI unknown (0xFF)
     raw: RawTelegram
 ```
+
+**RSSI display when None:** render as `"N/A"` in the log line:
+`YYYY-MM-DDTHH:MM:SS.mmm  0xABCD1234  RPS (0xF6)  <payload>  RSSI N/A`
 
 ### 3.3 Filter model
 
 - Stored as `filter_id: int | None` on SnifferScreen.
-- Filter is **retroactive**: re-renders entire log from in-memory `_buffer: list[FormattedTelegram]` (capped at 10 000 entries, same as `max_lines`).
+- Filter is **retroactive**: re-renders entire log from in-memory `_buffer: deque[FormattedTelegram]` (`collections.deque(maxlen=10_000)` — same bound as `max_lines`; oldest entries auto-dropped on overflow, consistent with `_pause_buffer`).
 - Applied **on Enter**, not live. Input shows "pending" visual state while typing.
 - Filter input accepts `0x` prefix (strips it before matching).
 - `f` again or `Escape` clears filter; full log re-renders.
@@ -156,14 +159,14 @@ No changes to `DongleService`, `FakeDongle`, or `Settings` public APIs.
 
 5. `src/enocean_async_tui/ui/screens/sniffer.py` — `SnifferScreen`
    - `RichLog(max_lines=10_000, wrap=False)`
-   - `_buffer: list[FormattedTelegram]` for retroactive filter
+   - `_buffer: deque[FormattedTelegram]` (`collections.deque(maxlen=10_000)`) for retroactive filter
    - Handles `TelegramReceived` → format → apply filter → append to log
 6. `src/enocean_async_tui/ui/formatters.py` — `format_telegram(t: RawTelegram) -> FormattedTelegram`
    - Timestamp: `datetime.now().isoformat(timespec="milliseconds")`
    - Sender ID: `f"0x{t.sender_id:08X}"`
    - RORG: name lookup + `f"{name} (0x{rorg_byte:02X})"`
    - Payload: `t.data.hex().upper()` (full hex, no truncation)
-   - RSSI: integer dBm from `t.rssi`
+   - RSSI: `t.rssi_dbm` (property on `RawTelegram`, returns `int | None`; render as `"N/A"` when `None`)
 
 ### Phase 1-C: Key bindings + filter
 
@@ -197,11 +200,15 @@ No changes to `DongleService`, `FakeDongle`, or `Settings` public APIs.
     accepts fake-dongle mode, initialise `FakeDongle` with the bundled demo recording
     (`tests/fixtures/recordings/burst-300.jsonl`, `realtime=True`) so Scenario C shows
     replayed telegrams immediately. Update `_handle_fallback()` in `app.py` to pass
-    `recording=Path(__file__).parent.parent / "tests/fixtures/recordings/burst-300.jsonl"`
-    (or resolve via importlib.resources for installed packages).
-17. Create `tests/fixtures/recordings/burst-300.jsonl` — 10–20 sample EnOcean telegrams
-    in FakeDongle replay format, covering at least 2 sender IDs and 2 RORG types (e.g.
-    RPS and 4BS), required for Scenario C demo and auto-discovery integration tests.
+    `recording=Path(__file__).parent.parent.parent / "tests/fixtures/recordings/burst-300.jsonl"`.
+    **Path note:** `app.py` lives at `src/enocean_async_tui/app.py`; three `.parent` hops reach
+    the project root. This path works in a development checkout only. For installed-package
+    support, bundle the fixture under `src/enocean_async_tui/data/` and use
+    `importlib.resources.files("enocean_async_tui").joinpath("data/burst-300.jsonl")`.
+17. Update `tests/fixtures/recordings/burst-300.jsonl` — the file exists but currently
+    contains only RPS (0xF6) telegrams. **Must-fix:** add 4BS (0xA5) entries covering a
+    second sender ID so the fixture meets the ≥2 RORG types requirement. Final fixture
+    should cover at least 2 sender IDs and 2 RORG types (RPS + 4BS minimum).
 
 ---
 
@@ -223,6 +230,7 @@ No production code without a test that demanded it. Red → green → refactor.
 | Test | File | Key assertion |
 |------|------|---------------|
 | `test_format_telegram` | `tests/unit/test_formatters.py` | Log line matches exact format spec |
+| `test_format_telegram_rssi_none` | `tests/unit/test_formatters.py` | Log line shows "RSSI N/A" when `rssi_dbm` is `None` |
 | `test_rorg_lookup` | `tests/unit/test_formatters.py` | All known RORGs produce correct name |
 | `test_pause_buffer_overflow` | `tests/unit/test_sniffer_worker.py` | 257th entry drops oldest, counter increments |
 | `test_clear_while_paused` | `tests/unit/test_sniffer_worker.py` | Both log buffer and pause buffer empty after clear |
@@ -238,9 +246,19 @@ No production code without a test that demanded it. Red → green → refactor.
 | `test_clear_running` | Populate log, press `c` | Log empty |
 | `test_clear_paused` | Pause, queue 5, press `c`, resume | Log remains empty after resume |
 | `test_filter_retroactive` | Replay 2 IDs, apply filter for ID-A | Only ID-A lines in RichLog |
+| `test_filter_live` | Set filter for ID-A then replay ID-A + ID-B telegrams | Only ID-A entries in RichLog; ID-B entries never appear |
 | `test_filter_enter` | Type partial ID, assert no change; press Enter | Log updates only on Enter |
 | `test_filter_clear` | Apply filter, press Escape | Full log re-renders |
 | `test_reconnect_streaming` | Stream 2, simulate disconnect, reconnect, stream 2 more | All 4 lines appear; no hang after reconnect |
+
+### Auto-discovery tests (unit — mocked `asyncio.to_thread`)
+
+| Test | File | Scenario | Key assertion |
+|------|------|----------|---------------|
+| `test_autodiscovery_single_dongle` | `tests/unit/test_autodiscovery.py` | `comports()` returns 1 matching VID/PID | Auto-connects; no modal shown |
+| `test_autodiscovery_multiple_dongles` | `tests/unit/test_autodiscovery.py` | `comports()` returns 2 matching VID/PIDs | Selection modal shown |
+| `test_autodiscovery_no_dongle` | `tests/unit/test_autodiscovery.py` | `comports()` returns 0 matching | FakeDongle modal shown |
+| `test_autodiscovery_uses_to_thread` | `tests/unit/test_autodiscovery.py` | Mock verifies `asyncio.to_thread` wrapping | `comports()` never called directly on event loop |
 
 ---
 
