@@ -1,7 +1,7 @@
 # Design: Phase 1 — Sniffer MVP
 
 **PRD:** `.prd-reviews/sniffer-mvp/prd-draft.md`
-**Status:** Alignment-reviewed (round 1: requirements + goals applied 2026-05-07; round 2: constraints + non-goals applied 2026-05-07; round 3: user-stories + open-questions applied 2026-05-07; completeness round 1: infrastructure + tests + error-handling applied 2026-05-07; sequencing round 1: task order + dependencies + critical path applied 2026-05-07; risk + scope-creep round 2: risks mitigated + scope trimmed applied 2026-05-07)
+**Status:** Alignment-reviewed (round 1: requirements + goals applied 2026-05-07; round 2: constraints + non-goals applied 2026-05-07; round 3: user-stories + open-questions applied 2026-05-07; completeness round 1: infrastructure + tests + error-handling applied 2026-05-07; sequencing round 1: task order + dependencies + critical path applied 2026-05-07; risk + scope-creep round 2: risks mitigated + scope trimmed applied 2026-05-07; testability + coherence round 3: 3 must-fix + 11 should-fix applied 2026-05-07)
 
 ---
 
@@ -36,6 +36,7 @@ App (Textual)
 ├── Header widget           ← extend: port + base-ID fields
 ├── SnifferScreen           ← new (replaces placeholder)
 │   ├── RichLog widget      ← Textual built-in; max_lines=10_000
+│   ├── PausedBanner widget ← Static/Label; hidden until 'p'; shows "PAUSED — N queued [N dropped]"
 │   └── FilterInput widget  ← inline Input, hidden until 'f' pressed
 └── Footer widget           ← extend: q/c/p/f key hints
 ```
@@ -118,7 +119,7 @@ class FormattedTelegram:
 - **Overflow**: oldest entry silently dropped; `_dropped_count` incremented; banner updates to show "N dropped" alongside the queued count.
 - **Clear while paused** (`c`): `RichLog.clear()` + `_pause_buffer.clear()` + `_buffer.clear()` + `_dropped_count = 0`.
 - **Clear while running** (`c`): `RichLog.clear()` + `_buffer.clear()`.
-- **Pause off** (`p`): flush `_pause_buffer` to `_buffer` and `RichLog` in order, then resume normal streaming.
+- **Pause off** (`p`): flush by posting `TelegramReceived(telegram)` for each entry in `_pause_buffer` in order — the screen's `on_TelegramReceived` handler applies the active filter, formats the telegram, and appends to `_buffer` and `RichLog` via the normal message path. Then resume normal streaming. (Direct-write bypass would silently skip the filter.)
 
 ---
 
@@ -184,7 +185,8 @@ No changes to `DongleService`, `FakeDongle`, or `Settings` public APIs.
    loop and measure wall time. If >200 ms, add a chunked flush helper:
    write 100–200 entries then `await asyncio.sleep(0)` to yield control between chunks.
    Document the result in a code comment in `screens/sniffer.py`. Only skip this spike if
-   prior measurement already exists.
+   prior measurement already exists. Optionally add a `@pytest.mark.slow`-marked benchmark
+   in `tests/perf/test_richlog_batch.py` so the measured baseline is CI-verifiable.
 
 5. `src/enocean_async_tui/ui/screens/sniffer.py` — `SnifferScreen`
    - `RichLog(max_lines=10_000, wrap=False)`
@@ -204,7 +206,8 @@ No changes to `DongleService`, `FakeDongle`, or `Settings` public APIs.
    first overflow; hide banner on pause-off after flush.
 10. `f` binding → show `FilterInput`; while typing, apply a "pending" CSS class (e.g.
     dim/italic) to signal the filter is not yet active; on Enter → remove pending style,
-    apply filter retroactively; on Escape → hide input, clear filter, re-render full log
+    apply filter retroactively; on Escape (or `f` again while input is visible) → hide
+    input, clear filter, re-render full log
 
 ### Phase 1-D: Header extension
 
@@ -224,6 +227,9 @@ No changes to `DongleService`, `FakeDongle`, or `Settings` public APIs.
     second sender ID so the fixture meets the ≥2 RORG types requirement. Final fixture
     should cover at least 2 sender IDs and 2 RORG types (RPS + 4BS minimum).
     *(must precede task 17: task 17 hardcodes the path to this fixture)*
+    After updating, add a companion test in `tests/unit/test_fixtures.py` that loads the
+    fixture and asserts ≥2 distinct RORG bytes and ≥2 distinct sender IDs, so CI catches
+    future regressions.
 
 > **Tasks 15, 16, 17 are parallel branches** of task 13's scan result (1 dongle / multiple /
 > none). They share no dependency on each other and may be implemented in any order or
@@ -256,9 +262,9 @@ No production code without a test that demanded it. Red → green → refactor.
 - `uv run pytest` — all tests pass
 - `uv run mypy` (strict) — zero errors; all new types fully annotated
 - `uv run ruff check src tests` — zero lint errors
-- Coverage ≥ 80% — auto-discovery paths (§1-E) must have targeted tests using
-  mocked serial port scan (`asyncio.to_thread` call verified by mock); FakeDongle
-  integration tests count toward coverage.
+- `uv run pytest --cov=src/enocean_async_tui --cov-fail-under=80` — coverage ≥ 80%;
+  auto-discovery paths (§1-E) must have targeted tests using mocked serial port scan
+  (`asyncio.to_thread` call verified by mock); FakeDongle integration tests count toward coverage.
 
 ### Unit tests
 
@@ -269,22 +275,29 @@ No production code without a test that demanded it. Red → green → refactor.
 | `test_rorg_lookup` | `tests/unit/test_formatters.py` | All known RORGs produce correct name |
 | `test_pause_buffer_overflow` | `tests/unit/test_sniffer_worker.py` | 257th entry drops oldest, counter increments |
 | `test_clear_while_paused` | `tests/unit/test_sniffer_worker.py` | Both log buffer and pause buffer empty after clear |
-| `test_reconnect_resumes_streaming` | `tests/unit/test_sniffer_worker.py` | Worker re-enters telegram loop after DongleDisconnected + reconnect event |
+| `test_reconnect_resumes_streaming` | `tests/unit/test_sniffer_worker.py` | Worker re-enters telegram loop after DongleDisconnected + reconnect asyncio.Event fired via DongleService mock; no busy-polling |
+| `test_buffer_maxlen` | `tests/unit/test_sniffer_screen.py` | `SnifferScreen._buffer` is `deque(maxlen=10_000)`; 10 001st entry drops oldest without raising |
 
 ### Integration tests (FakeDongle + Textual Pilot)
+
+All integration tests live in `tests/integration/test_sniffer.py` unless noted.
 
 | Test | Scenario | Assertion |
 |------|----------|-----------|
 | `test_live_display` | FakeDongle replays 3 telegrams | All 3 lines appear in RichLog |
 | `test_pause_resume` | Replay 2, pause, replay 2 more, resume | 4 lines total; none lost |
 | `test_pause_overflow` | Pause, replay 257 telegrams | 256 lines visible; overflow counter shows 1 |
+| `test_pause_banner` | Pause; then pause with 257 telegrams | Banner shows "PAUSED — N queued"; "1 dropped" appended after overflow |
 | `test_clear_running` | Populate log, press `c` | Log empty |
 | `test_clear_paused` | Pause, queue 5, press `c`, resume | Log remains empty after resume |
 | `test_filter_retroactive` | Replay 2 IDs, apply filter for ID-A | Only ID-A lines in RichLog |
 | `test_filter_live` | Set filter for ID-A then replay ID-A + ID-B telegrams | Only ID-A entries in RichLog; ID-B entries never appear |
-| `test_filter_enter` | Type partial ID, assert no change; press Enter | Log updates only on Enter |
+| `test_filter_enter` | Type partial ID; assert no change and pending CSS class present; press Enter | Log updates only on Enter; pending CSS class removed after Enter |
 | `test_filter_clear` | Apply filter, press Escape | Full log re-renders |
-| `test_reconnect_streaming` | Stream 2, simulate disconnect, reconnect, stream 2 more | All 4 lines appear; no hang after reconnect |
+| `test_reconnect_streaming` | Stream 2, mock fires DongleDisconnected then reconnect event, stream 2 more | All 4 lines appear; no hang after reconnect |
+| `test_quit_binding` | Press `q` | App exits cleanly (no exception, returncode 0) |
+| `test_header_content` | Start with `--port /dev/ttyUSB0`, connect via FakeDongle | Header shows port `/dev/ttyUSB0` and base-ID `–` |
+| `test_scenario_c_e2e` | Start with no `--port`; `comports()` mock returns 0; user accepts FakeDongle modal | Sniffer screen receives and displays replayed telegrams from `burst-300.jsonl` |
 
 ### Auto-discovery tests (unit — mocked `asyncio.to_thread`)
 
@@ -294,6 +307,7 @@ No production code without a test that demanded it. Red → green → refactor.
 | `test_autodiscovery_multiple_dongles` | `tests/unit/test_autodiscovery.py` | `comports()` returns 2 matching VID/PIDs | Selection modal shown |
 | `test_autodiscovery_no_dongle` | `tests/unit/test_autodiscovery.py` | `comports()` returns 0 matching | FakeDongle modal shown |
 | `test_autodiscovery_uses_to_thread` | `tests/unit/test_autodiscovery.py` | Mock verifies `asyncio.to_thread` wrapping | `comports()` never called directly on event loop |
+| `test_fixture_contents` | `tests/unit/test_fixtures.py` | Load `burst-300.jsonl` | ≥2 distinct RORG type bytes and ≥2 distinct sender IDs present |
 
 ---
 
