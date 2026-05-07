@@ -1,7 +1,7 @@
 # Design: Phase 1 — Sniffer MVP
 
 **PRD:** `.prd-reviews/sniffer-mvp/prd-draft.md`
-**Status:** Alignment-reviewed (round 1: requirements + goals applied 2026-05-07; round 2: constraints + non-goals applied 2026-05-07; round 3: user-stories + open-questions applied 2026-05-07; completeness round 1: infrastructure + tests + error-handling applied 2026-05-07; sequencing round 1: task order + dependencies + critical path applied 2026-05-07; risk + scope-creep round 2: risks mitigated + scope trimmed applied 2026-05-07; testability + coherence round 3: 3 must-fix + 11 should-fix applied 2026-05-07)
+**Status:** Alignment-reviewed (round 1: requirements + goals applied 2026-05-07; round 2: constraints + non-goals applied 2026-05-07; round 3: user-stories + open-questions applied 2026-05-07; completeness round 1: infrastructure + tests + error-handling applied 2026-05-07; sequencing round 1: task order + dependencies + critical path applied 2026-05-07; risk + scope-creep round 2: risks mitigated + scope trimmed applied 2026-05-07; testability + coherence round 3: 3 must-fix + 11 should-fix applied 2026-05-07; design synthesis: dimension analyses incorporated 2026-05-07)
 
 ---
 
@@ -91,15 +91,21 @@ Posts `TelegramReceived(telegram: RawTelegram)` Textual messages to App.
 ### 3.2 Telegram data model
 
 ```python
-@dataclass
+@dataclass(frozen=True, slots=True)
 class FormattedTelegram:
     timestamp: str          # ISO 8601 with ms: "2026-05-07T14:23:01.042"
-    sender_id: str          # "0xABCD1234"
+    sender_id: str          # "0xABCD1234" — display string
+    sender_int: int         # 0xABCD1234 — integer for O(1) filter comparisons
     rorg_name: str          # "RPS (0xF6)"
     payload_hex: str        # full hex string, no 0x prefix
     rssi_dbm: int | None    # e.g. -62; None when dongle reports RSSI unknown (0xFF)
+    line: str               # precomputed Rich-markup log line (avoids re-formatting on filter re-render)
     raw: RawTelegram
 ```
+
+`sender_int` enables `O(1)` filter comparison (`entry.sender_int == filter_id`) instead of string parsing on every re-render. `line` is the full precomputed log line passed to `RichLog.write_markup()`; at 10 000 entries it costs ~1 MB but saves all formatting overhead during filter re-renders.
+
+`RawTelegram.sender` type is `EURID | BaseAddress`; extract as `int(sender)` (verify in task 4 that both types support `__int__`).
 
 **RSSI display when None:** render as `"N/A"` in the log line:
 `YYYY-MM-DDTHH:MM:SS.mmm  0xABCD1234  RPS (0xF6)  <payload>  RSSI N/A`
@@ -109,9 +115,12 @@ class FormattedTelegram:
 - Stored as `filter_id: int | None` on SnifferScreen.
 - Filter is **retroactive**: re-renders entire log from in-memory `_buffer: deque[FormattedTelegram]` (`collections.deque(maxlen=10_000)` — same bound as `max_lines`; oldest entries auto-dropped on overflow, consistent with `_pause_buffer`).
 - Applied **on Enter**, not live. Input shows "pending" visual state while typing.
-- Filter input accepts `0x` prefix (strips it before matching).
+- Filter input accepts `0x` prefix (strips it before matching). Hex-only validator on the `Input` widget rejects non-hex characters inline.
+- Filter matching: `entry.sender_int == filter_id` — O(1) integer comparison on `FormattedTelegram.sender_int`.
 - `f` again or `Escape` clears filter; full log re-renders.
 - **Live filtering:** when `filter_id` is set, new incoming `TelegramReceived` messages are also filtered — the handler skips non-matching entries without adding them to `_buffer` or `RichLog`.
+- **Empty-filter notice:** if the filter matches zero entries in `_buffer`, display a centred notice in the `RichLog` area so an empty log is not mistaken for a disconnected dongle.
+- **Filter active indicator:** show `[FILTER: 0xABCD1234]` in the header or status bar while a filter is applied (via `reactive` on `SnifferScreen`).
 
 ### 3.4 Pause / Clear semantics
 
@@ -140,7 +149,20 @@ class SnifferWorker:
     def clear_buffer(self) -> None: ...
 ```
 
-No changes to `DongleService`, `FakeDongle`, or `Settings` public APIs.
+**Settings additions** (from API dimension analysis):
+
+```python
+@dataclass(frozen=True, slots=True)
+class Settings:
+    port: str
+    log_level: LogLevel
+    fake: bool          # NEW — True when --fake flag given
+    max_lines: int      # NEW — from ENOCEAN_TUI_MAX_LINES env var, default 10_000
+```
+
+`--fake` wins silently over `--port` when both are given; a `_LOGGER.warning` is emitted. `max_lines` is exposed only via the `ENOCEAN_TUI_MAX_LINES` env var (not `--help`) to keep CLI output clean.
+
+No changes to `DongleService` or `FakeDongle` public APIs.
 
 ### 4.2 App entry point
 
@@ -167,16 +189,25 @@ No changes to `DongleService`, `FakeDongle`, or `Settings` public APIs.
    - `_wait_for_reconnect()`: **MUST await the Phase 0 DongleService reconnect event** (not
      busy-poll); reference Phase 0 state-change API for the exact call. Ensure only
      `DongleDisconnected` is caught; `CancelledError` must propagate for clean Worker shutdown.
+   - **Per-telegram parse-error handling (security hardening):** wrap the inner `async for`
+     body in `try/except` to catch parse errors from `enocean-async`. Post a `ParseWarning`
+     message (or equivalent) to display a yellow warning line in `RichLog` and continue.
+     `CancelledError` must be re-raised explicitly (`except CancelledError: raise`) or the
+     `except` clause must not cover it. Check `enocean-async` exception hierarchy first to
+     narrow the catch clause (prefer specific over `except Exception`).
 
 ### Phase 1-B: Sniffer screen / log display
 
 4. `src/enocean_async_tui/ui/formatters.py` — `format_telegram(t: RawTelegram) -> FormattedTelegram`
    *(must precede task 5: SnifferScreen uses `FormattedTelegram` and `format_telegram`)*
    - Timestamp: `datetime.now().isoformat(timespec="milliseconds")`
-   - Sender ID: `f"0x{t.sender_id:08X}"`
+   - Sender ID: `f"0x{t.sender_id:08X}"` → `sender_id: str`; also compute `sender_int = int(t.sender)` (verify `EURID | BaseAddress` both support `__int__` before writing; if not, add a helper)
    - RORG: name lookup + `f"{name} (0x{rorg_byte:02X})"`; use `RORG.name` from enum
-   - Payload: `t.data.hex().upper()` (full hex, no truncation)
+   - Payload: `t.data.hex().upper()` (full hex, no truncation) — confirm this is the full ERP1 data field, not just application bytes
    - RSSI: `t.rssi_dbm` (property on `RawTelegram`, returns `int | None`; render as `"N/A"` when `None`)
+   - `line`: precompute the full Rich-markup log line (see suggested palette in §11). Apply
+     `rich.markup.escape()` to any field derived from untrusted input (in practice hex strings
+     cannot contain markup, but make this assumption explicit)
    - **Verify first:** confirm `RawTelegram.rssi_dbm` exists in the installed version of `enocean-async`.
      If absent, derive via `(t.rssi if t.rssi != 0xFF else None)` and open a bead to add the property upstream.
 
@@ -202,17 +233,34 @@ No changes to `DongleService`, `FakeDongle`, or `Settings` public APIs.
 8. `c` binding → `screen.clear_log()`
 9. `p` binding → `screen.toggle_pause()`; on pause-on, show inline PAUSED banner
    (`Static` or `Label` widget overlaid on the log pane) reading
-   `"PAUSED — N queued"` (update count as buffer grows); append `" (N dropped)"` on
-   first overflow; hide banner on pause-off after flush.
-10. `f` binding → show `FilterInput`; while typing, apply a "pending" CSS class (e.g.
-    dim/italic) to signal the filter is not yet active; on Enter → remove pending style,
-    apply filter retroactively; on Escape (or `f` again while input is visible) → hide
-    input, clear filter, re-render full log
+   `"PAUSED — N queued"` (update count as buffer grows); dropped count (`" (N dropped)"`)
+   must use **warning colour** (Textual `$error` CSS variable, red by default) so overflow
+   is impossible to miss; hide banner on pause-off after flush.
+10. `f` binding → show `FilterInput`:
+    - Placeholder text: `"e.g. ABCD1234 or 0xABCD1234"` (eliminates format ambiguity)
+    - Hex-only input validator: Textual `Input(restrict=r"[0-9A-Fa-fx]")` or a `Validator`
+      subclass; reject on Enter if result is empty or > 8 hex digits
+    - Opening the filter input implicitly pauses live display (not the worker) until
+      dismissed — prevents disorienting scroll while typing 8 hex digits
+    - While typing: apply "pending" CSS class (dim/italic) to signal filter not yet active
+    - On Enter: remove pending style, apply filter retroactively; if zero matches show
+      empty-filter notice; update filter active indicator in header
+    - On Escape (or `f` again while input is visible): hide input, clear filter, re-render full log, resume live display
 
 ### Phase 1-D: Header extension
 
 11. Extend existing Header widget to add port (from Settings) and base-ID (`–`)
+    - Add filter active indicator: `[FILTER: 0xABCD1234]` shown via `reactive` on `SnifferScreen`
+    - **FakeDongle mode indicator:** when `Settings.fake` is `True`, show `"DEMO (fake dongle)"`
+      in the dongle status field instead of a port path — users must never mistake simulated
+      for real traffic
+    - **Auto-discovery feedback:** when no `--port` is given and discovery is running, display
+      `"Scanning for dongles…"` in the header until discovery completes (prevents apparent hang)
 12. Dongle status already wired in Phase 0; extend to update port label on connect
+13. Add `base_id: int | None` property to the `Dongle` Protocol
+    (`dongle/protocol.py`). `DongleService` reads it from `Gateway.base_id` after connect
+    (verify availability in `enocean-async` ≥ 0.13.1); `FakeDongle` exposes a configurable
+    attribute (default `None` or `0x01234567`). Header shows `–` for `None` throughout Phase 1.
 
 ### Phase 1-E: Auto-discovery
 
@@ -230,6 +278,17 @@ No changes to `DongleService`, `FakeDongle`, or `Settings` public APIs.
     After updating, add a companion test in `tests/unit/test_fixtures.py` that loads the
     fixture and asserts ≥2 distinct RORG bytes and ≥2 distinct sender IDs, so CI catches
     future regressions.
+
+### Phase 1-F: Security hardening
+
+18. FakeDongle fixture validation: when loading `burst-300.jsonl`, validate required fields
+    and value types per line before constructing `FakeTelegram` objects. Fail with a clear
+    startup error rather than a cryptic downstream crash mid-demo. (Low effort — simple
+    field-presence + type check; no third-party schema library needed.)
+19. `PermissionError` vs `port not found` distinction: `DongleService` serial port open
+    errors must surface distinct messages. `PermissionError` → "Permission denied — check
+    you are in the `dialout` group"; `FileNotFoundError` / port missing → "Port not found".
+    Both fall back to the FakeDongle modal but with different status text.
 
 > **Tasks 15, 16, 17 are parallel branches** of task 13's scan result (1 dongle / multiple /
 > none). They share no dependency on each other and may be implemented in any order or
@@ -277,6 +336,10 @@ No production code without a test that demanded it. Red → green → refactor.
 | `test_clear_while_paused` | `tests/unit/test_sniffer_worker.py` | Both log buffer and pause buffer empty after clear |
 | `test_reconnect_resumes_streaming` | `tests/unit/test_sniffer_worker.py` | Worker re-enters telegram loop after DongleDisconnected + reconnect asyncio.Event fired via DongleService mock; no busy-polling |
 | `test_buffer_maxlen` | `tests/unit/test_sniffer_screen.py` | `SnifferScreen._buffer` is `deque(maxlen=10_000)`; 10 001st entry drops oldest without raising |
+| `test_parse_error_continues` | `tests/unit/test_sniffer_worker.py` | Worker posts ParseWarning and continues on malformed telegram (does not crash) |
+| `test_cancelled_error_propagates` | `tests/unit/test_sniffer_worker.py` | `CancelledError` is NOT swallowed by parse-error handler |
+| `test_format_telegram_sender_int` | `tests/unit/test_formatters.py` | `FormattedTelegram.sender_int` equals `int(raw.sender)` |
+| `test_filter_sender_int_comparison` | `tests/unit/test_sniffer_screen.py` | Filter uses `entry.sender_int == filter_id` (integer comparison, not string) |
 
 ### Integration tests (FakeDongle + Textual Pilot)
 
@@ -308,10 +371,16 @@ All integration tests live in `tests/integration/test_sniffer.py` unless noted.
 | `test_autodiscovery_no_dongle` | `tests/unit/test_autodiscovery.py` | `comports()` returns 0 matching | FakeDongle modal shown |
 | `test_autodiscovery_uses_to_thread` | `tests/unit/test_autodiscovery.py` | Mock verifies `asyncio.to_thread` wrapping | `comports()` never called directly on event loop |
 | `test_fixture_contents` | `tests/unit/test_fixtures.py` | Load `burst-300.jsonl` | ≥2 distinct RORG type bytes and ≥2 distinct sender IDs present |
+| `test_fixture_validation_malformed` | `tests/unit/test_fake_dongle.py` | Malformed `burst-300.jsonl` line → clear startup error, not cryptic crash |
+| `test_filter_empty_notice` | pilot | Filter matches zero entries → empty-filter notice shown in RichLog |
+| `test_fake_dongle_header_indicator` | pilot | Header shows "DEMO (fake dongle)" when `Settings.fake=True` |
+| `test_filter_active_indicator` | pilot | Header shows `[FILTER: 0xABCD1234]` while filter is applied |
 
 ---
 
-## 7. Open Questions (resolved from PRD clarifications)
+## 7. Open Questions
+
+### Resolved (from PRD clarifications)
 
 | OQ | Decision |
 |----|----------|
@@ -325,6 +394,18 @@ All integration tests live in `tests/integration/test_sniffer.py` unless noted.
 | Port not found | Auto-discover first; then FakeDongle modal if no dongle found |
 | 100 ms goal | Display latency (receive-to-screen), not cold-start |
 | Demo speed (C7) | ≤60s from command to live sniffer; auto-discovery eliminates manual port lookup; no synchronous startup gates that block first telegram |
+
+### Unresolved (require implementation-time verification)
+
+| Question | Raised by | Action required |
+|----------|-----------|-----------------|
+| Does `enocean-async` define its own exception hierarchy (e.g. `EnoceanParseError`) or raise stdlib exceptions? | security.md | Check source/docs before writing per-telegram except clause |
+| Does `int(EURID)` and `int(BaseAddress)` work in `enocean-async ≥ 0.13.1`? | data.md | Verify before writing `format_telegram` |
+| Is `RawTelegram.payload` the full ERP1 data field or only application bytes (sans RORG byte)? | data.md | Verify against PRD format spec before writing formatter |
+| Does `enocean_async.Gateway` expose `base_id` and when is it populated? | integration.md | Verify in `enocean-async ≥ 0.13.1` API before adding Protocol property |
+| Should `f` (filter input) implicitly pause live display while the input is open? | ux.md | Decide at implementation time; recommendation is yes (prevents disorienting scroll) |
+| Does `RichLog` auto-scroll by default, and can it be toggled when the user manually scrolls up? | ux.md | Check Textual source; add `scroll_end=False` toggle if needed |
+| Should `c` (clear) emit a `notify()` toast confirming the action? | ux.md | Low-stakes UX decision; silent clear is acceptable for this audience |
 
 ---
 
@@ -365,3 +446,29 @@ All integration tests live in `tests/integration/test_sniffer.py` unless noted.
 | `_wait_for_reconnect()` busy-polls state | Medium | Must await Phase 0 DongleService reconnect event (asyncio.Event or equivalent), NOT poll. Specified in task 3. |
 | `RawTelegram.rssi_dbm` property absent in installed enocean-async version | Low | Verify in task 4 before writing formatter; fallback derivation documented in task 4. |
 | Auto-discovery blocks event loop | High | `comports()` MUST run in `asyncio.to_thread`; tests mock the call to verify wrapping |
+| Malformed RF input crashes sniffer session | Medium | Per-telegram parse-error handler (task 3); worker continues after displaying yellow warning line |
+| Rich markup injection from parse error strings | Low | Apply `rich.markup.escape(str(exc))` before inserting exception message into `write_markup()` |
+| Auto-discovery startup opacity (1–2 s hang) | Medium | Show `"Scanning for dongles…"` spinner in header during `asyncio.to_thread(comports)` (task 11) |
+| User mistakes fake traffic for real hardware | Low | FakeDongle mode indicator in header (task 11); "DEMO (fake dongle)" shown when `Settings.fake=True` |
+| Filter empty looks like disconnected dongle | Low | Empty-filter notice in `RichLog` area when filter matches zero entries (task 10) |
+
+---
+
+## 11. Appendix: Dimension Analyses
+
+Full dimension analyses are in `.designs/sniffer-mvp/`. Each explores one concern independently and feeds into this document:
+
+| Dimension | File | Key contribution |
+|-----------|------|-----------------|
+| API & Interface Design | `.designs/sniffer-mvp/api.md` | `--fake` flag, `Settings.fake/max_lines`, filter bar UX, `TelegramLog` widget API |
+| Data Model Design | `.designs/sniffer-mvp/data.md` | `FormattedTelegram` schema with `sender_int`/`line`, buffer sizing, filter contract |
+| Integration Analysis | `.designs/sniffer-mvp/integration.md` | `ui/` sub-package layout, `base_id` Protocol extension, widget-level pause model |
+| Scalability Analysis | `.designs/sniffer-mvp/scale.md` | O(1) per-telegram hot path, `deque(maxlen=10_000)` for display buffer, filter re-render cost |
+| Security Analysis | `.designs/sniffer-mvp/security.md` | Per-telegram error handling, hex-only filter validation, fixture validation, `rich.markup.escape` |
+| User Experience Analysis | `.designs/sniffer-mvp/ux.md` | Filter placeholder, empty-filter notice, filter indicator, FakeDongle mode indicator, colour coding, discovery spinner |
+
+**Suggested Rich markup palette for log lines** (from ux.md §Option 6):
+```
+[dim]2026-05-07T14:23:01.042[/dim]  [cyan bold]0xABCD1234[/cyan bold]  [yellow]RPS (0xF6)[/yellow]  F600  [blue]RSSI -62 dBm[/blue]
+```
+Minimal viable: sender ID in `[cyan bold]`, RORG in `[yellow]`, remainder default. Dramatically improves scan-ability at zero architecture cost.
