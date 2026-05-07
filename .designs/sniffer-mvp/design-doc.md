@@ -1,7 +1,7 @@
 # Design: Phase 1 — Sniffer MVP
 
 **PRD:** `.prd-reviews/sniffer-mvp/prd-draft.md`
-**Status:** Alignment-reviewed (round 1: requirements + goals applied 2026-05-07; round 2: constraints + non-goals applied 2026-05-07; round 3: user-stories + open-questions applied 2026-05-07; completeness round 1: infrastructure + tests + error-handling applied 2026-05-07)
+**Status:** Alignment-reviewed (round 1: requirements + goals applied 2026-05-07; round 2: constraints + non-goals applied 2026-05-07; round 3: user-stories + open-questions applied 2026-05-07; completeness round 1: infrastructure + tests + error-handling applied 2026-05-07; sequencing round 1: task order + dependencies + critical path applied 2026-05-07)
 
 ---
 
@@ -107,7 +107,7 @@ class FormattedTelegram:
 
 ### 3.4 Pause / Clear semantics
 
-- **Pause on** (`p`): `_paused = True`; new telegrams go to `_pause_buffer: deque[FormattedTelegram](maxlen=256)`.
+- **Pause on** (`p`): `_paused = True`; new telegrams go to `_pause_buffer: deque[RawTelegram](maxlen=256)` (on the worker; format happens on flush, consistent with §3.1 code).
 - **Overflow**: oldest entry silently dropped; `_dropped_count` incremented; banner updates to show "N dropped" alongside the queued count.
 - **Clear while paused** (`c`): `RichLog.clear()` + `_pause_buffer.clear()` + `_buffer.clear()` + `_dropped_count = 0`.
 - **Clear while running** (`c`): `RichLog.clear()` + `_buffer.clear()`.
@@ -145,28 +145,34 @@ No changes to `DongleService`, `FakeDongle`, or `Settings` public APIs.
 
 ## 5. Implementation Tasks (ordered)
 
+> **TDD applies throughout:** write the failing test (§6) before the production code it demands.
+
 ### Phase 1-A: Sniffer worker (core plumbing)
 
 1. `src/enocean_async_tui/ui/workers/__init__.py` — create package
-2. `src/enocean_async_tui/ui/workers/sniffer.py` — `SnifferWorker` class
+2. `src/enocean_async_tui/ui/messages.py` — `TelegramReceived` message dataclass
+   *(must precede task 3: SnifferWorker imports this class)*
+3. `src/enocean_async_tui/ui/workers/sniffer.py` — `SnifferWorker` class
    - `async def run()`: iterates `DongleService.telegrams()`
    - Pause buffer (deque maxlen=256) + asyncio Event
    - Posts `TelegramReceived` to app
-3. `src/enocean_async_tui/ui/messages.py` — `TelegramReceived` message dataclass
-4. Wire into `App.on_mount`: start SnifferWorker alongside existing state subscriber
 
 ### Phase 1-B: Sniffer screen / log display
 
+4. `src/enocean_async_tui/ui/formatters.py` — `format_telegram(t: RawTelegram) -> FormattedTelegram`
+   *(must precede task 5: SnifferScreen uses `FormattedTelegram` and `format_telegram`)*
+   - Timestamp: `datetime.now().isoformat(timespec="milliseconds")`
+   - Sender ID: `f"0x{t.sender_id:08X}"`
+   - RORG: name lookup + `f"{name} (0x{rorg_byte:02X})"`; use `RORG.name` from enum
+   - Payload: `t.data.hex().upper()` (full hex, no truncation)
+   - RSSI: `t.rssi_dbm` (property on `RawTelegram`, returns `int | None`; render as `"N/A"` when `None`)
 5. `src/enocean_async_tui/ui/screens/sniffer.py` — `SnifferScreen`
    - `RichLog(max_lines=10_000, wrap=False)`
    - `_buffer: deque[FormattedTelegram]` (`collections.deque(maxlen=10_000)`) for retroactive filter
    - Handles `TelegramReceived` → format → apply filter → append to log
-6. `src/enocean_async_tui/ui/formatters.py` — `format_telegram(t: RawTelegram) -> FormattedTelegram`
-   - Timestamp: `datetime.now().isoformat(timespec="milliseconds")`
-   - Sender ID: `f"0x{t.sender_id:08X}"`
-   - RORG: name lookup + `f"{name} (0x{rorg_byte:02X})"`
-   - Payload: `t.data.hex().upper()` (full hex, no truncation)
-   - RSSI: `t.rssi_dbm` (property on `RawTelegram`, returns `int | None`; render as `"N/A"` when `None`)
+6. Wire into `App.on_mount`: mount `SnifferScreen` (replacing placeholder) and start `SnifferWorker`
+   alongside existing state subscriber
+   *(must follow task 5: worker posts `TelegramReceived` on mount; screen must exist to handle them)*
 
 ### Phase 1-C: Key bindings + filter
 
@@ -193,10 +199,20 @@ No changes to `DongleService`, `FakeDongle`, or `Settings` public APIs.
     - **Constraint (C1+C2):** `comports()` is a synchronous blocking call; MUST be
       wrapped: `await asyncio.to_thread(serial.tools.list_ports.comports)` to avoid
       blocking the event loop
-14. If exactly one found: auto-connect
-15. If multiple found: present selection modal (user picks one dongle — this is
+14. Update `tests/fixtures/recordings/burst-300.jsonl` — the file exists but currently
+    contains only RPS (0xF6) telegrams. **Must-fix:** add 4BS (0xA5) entries covering a
+    second sender ID so the fixture meets the ≥2 RORG types requirement. Final fixture
+    should cover at least 2 sender IDs and 2 RORG types (RPS + 4BS minimum).
+    *(must precede task 17: task 17 hardcodes the path to this fixture)*
+
+> **Tasks 15, 16, 17 are parallel branches** of task 13's scan result (1 dongle / multiple /
+> none). They share no dependency on each other and may be implemented in any order or
+> concurrently once tasks 13 and 14 are done.
+
+15. If exactly one found: auto-connect
+16. If multiple found: present selection modal (user picks one dongle — this is
     single-dongle selection, not simultaneous multi-dongle use; see §8 Non-Goals)
-16. If none: existing FakeDongle modal flow (Phase 0). **Phase 1 fix:** when user
+17. If none: existing FakeDongle modal flow (Phase 0). **Phase 1 fix:** when user
     accepts fake-dongle mode, initialise `FakeDongle` with the bundled demo recording
     (`tests/fixtures/recordings/burst-300.jsonl`, `realtime=True`) so Scenario C shows
     replayed telegrams immediately. Update `_handle_fallback()` in `app.py` to pass
@@ -205,10 +221,6 @@ No changes to `DongleService`, `FakeDongle`, or `Settings` public APIs.
     the project root. This path works in a development checkout only. For installed-package
     support, bundle the fixture under `src/enocean_async_tui/data/` and use
     `importlib.resources.files("enocean_async_tui").joinpath("data/burst-300.jsonl")`.
-17. Update `tests/fixtures/recordings/burst-300.jsonl` — the file exists but currently
-    contains only RPS (0xF6) telegrams. **Must-fix:** add 4BS (0xA5) entries covering a
-    second sender ID so the fixture meets the ≥2 RORG types requirement. Final fixture
-    should cover at least 2 sender IDs and 2 RORG types (RPS + 4BS minimum).
 
 ---
 
