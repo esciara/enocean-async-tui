@@ -1,7 +1,7 @@
 # Design: Phase 1 — Sniffer MVP
 
 **PRD:** `.prd-reviews/sniffer-mvp/prd-draft.md`
-**Status:** Alignment-reviewed (round 1: requirements + goals applied 2026-05-07)
+**Status:** Alignment-reviewed (round 1: requirements + goals applied 2026-05-07; round 2: constraints + non-goals applied 2026-05-07)
 
 ---
 
@@ -179,8 +179,14 @@ No changes to `DongleService`, `FakeDongle`, or `Settings` public APIs.
 ### Phase 1-E: Auto-discovery
 
 13. When no `--port` given (or port not found), scan serial ports for EnOcean dongles
+    - Detection: match USB VID/PID via `serial.tools.list_ports.comports()` against
+      known EnOcean dongle VID/PIDs — passive enumeration, no probe commands sent
+    - **Constraint (C1+C2):** `comports()` is a synchronous blocking call; MUST be
+      wrapped: `await asyncio.to_thread(serial.tools.list_ports.comports)` to avoid
+      blocking the event loop
 14. If exactly one found: auto-connect
-15. If multiple: present selection modal
+15. If multiple found: present selection modal (user picks one dongle — this is
+    single-dongle selection, not simultaneous multi-dongle use; see §8 Non-Goals)
 16. If none: existing FakeDongle modal flow (Phase 0)
 
 ---
@@ -195,7 +201,8 @@ No production code without a test that demanded it. Red → green → refactor.
 - `uv run mypy` (strict) — zero errors; all new types fully annotated
 - `uv run ruff check src tests` — zero lint errors
 - Coverage ≥ 80% — auto-discovery paths (§1-E) must have targeted tests using
-  mocked serial port scan; FakeDongle integration tests count toward coverage.
+  mocked serial port scan (`asyncio.to_thread` call verified by mock); FakeDongle
+  integration tests count toward coverage.
 
 ### Unit tests
 
@@ -236,6 +243,7 @@ No production code without a test that demanded it. Red → green → refactor.
 | Log line format | `YYYY-MM-DDTHH:MM:SS.mmm  0xABCD1234  RPS (0xF6)  <payload-hex>  RSSI -62 dBm` |
 | Port not found | Auto-discover first; then FakeDongle modal if no dongle found |
 | 100 ms goal | Display latency (receive-to-screen), not cold-start |
+| Demo speed (C7) | ≤60s from command to live sniffer; auto-discovery eliminates manual port lookup; no synchronous startup gates that block first telegram |
 
 ---
 
@@ -245,7 +253,9 @@ No production code without a test that demanded it. Red → green → refactor.
 - Device registry
 - Teach-in flow
 - Outgoing commands
-- Multi-dongle support
+- Multi-dongle simultaneous support (§1-E selection modal lets user pick one dongle from
+  several detected — this is not simultaneous multi-dongle use; exactly one dongle is
+  always active. No probe commands are sent during detection; USB VID/PID matching only.)
 - Structured file logging
 - MQTT / remote access
 - RORG / payload content filtering
@@ -270,3 +280,4 @@ No production code without a test that demanded it. Red → green → refactor.
 | Pause buffer overflow misleads user | Low | Show dropped-count prominently in PAUSED banner |
 | FakeDongle replay timing differs from real dongle | Low | Tests use FakeDongle explicitly; real dongle integration is manual |
 | Textual Worker lifecycle vs asyncio Event interaction | Medium | Use `asyncio.Event` (not `threading.Event`); same event loop |
+| Auto-discovery blocks event loop | High | `comports()` MUST run in `asyncio.to_thread`; tests mock the call to verify wrapping |
