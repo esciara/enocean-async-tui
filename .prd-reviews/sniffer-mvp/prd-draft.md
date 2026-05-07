@@ -173,3 +173,35 @@ Phase 1 extends the Phase 0 app shell with minimal additions:
 - Filter: replay telegrams from 2 sender IDs; apply filter for one; 
   assert only matching lines visible.
 - Clear: populate log, press `c`, assert log empty.
+
+## Clarifications from Human Review
+
+**Q1: Is "no data lost while paused" an absolute guarantee or capped at 256?**
+A: Capped at 256 entries. The pause buffer is a bounded deque of 256. When full, the oldest entry is dropped to make room for the newest (ring-buffer semantics). A "N telegrams dropped while paused" counter is shown in the UI when overflow occurs.
+
+**Q2: What happens when `c` (clear) is pressed while paused?**
+A: `c` clears both the visible log AND the pause buffer. The user gets a clean slate — on resume, only telegrams received after unpausing will appear.
+
+**Q3: Does the filter apply retroactively or only to new telegrams?**
+A: Retroactive. When a filter is applied or changed, the entire log re-renders from an in-memory buffer of all received telegrams. Requires keeping all received telegrams in memory (up to the log retention bound).
+
+**Q4: Does the filter apply on Enter or live on each keystroke?**
+A: Apply on Enter. Show a "pending" visual state while the user is typing. Log re-renders only on Enter (or Escape to clear).
+
+**Q5: What is the exact log line format?**
+A: `2026-05-07T14:23:01.042  0xABCD1234  RPS (0xF6)  70  RSSI -62 dBm`
+- Timestamp: ISO 8601 full datetime with millisecond precision (`YYYY-MM-DDTHH:MM:SS.mmm`)
+- Sender ID: `0xABCD1234` (C-style hex with `0x` prefix)
+- RORG: name + hex in parentheses `RPS (0xF6)`
+- Payload: full hex string
+- RSSI: dBm value
+- Filter input: accepts `0x` prefix (strips it for matching)
+
+**Q6: When `--port` is given but can't be opened, what does the UI show?**
+A: Offer FakeDongle fallback (matching Scenario C). Additionally, Phase 1 should include auto-discovery of connected dongles — when no `--port` is specified (or the given port is not found), the app scans for available EnOcean dongles and either connects automatically or presents options.
+
+**Q7: Is the "100 ms" startup target from process start or first dongle frame?**
+A: Display latency — telegrams appear within 100 ms of being received by the app. This is not a cold-start target. Goal 1 should be reworded to: "A user can run `uv run enocean-tui --port /dev/ttyUSB0` and see a live, scrolling log of EnOcean telegrams with no perceptible lag between a telegram arriving and it appearing in the log."
+
+**Q8: Is base ID retrieval (COMMON_COMMAND_RBASE) in scope for Phase 1?**
+A: Deferred to Phase 2. The header shows `–` for base ID throughout Phase 1. Goal 3 amended: "Header displays: app title, dongle status, serial port, dongle base ID (shows `–` in Phase 1; retrieved in Phase 2)."
