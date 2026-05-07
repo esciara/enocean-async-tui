@@ -21,6 +21,7 @@ from enocean_async_tui.dongle import (
 )
 from enocean_async_tui.dongle.autodiscovery import discover_dongles
 from enocean_async_tui.settings import Settings
+from enocean_async_tui.ui.messages import FilterChanged
 from enocean_async_tui.ui.screens.sniffer import SnifferScreen
 from enocean_async_tui.ui.workers.sniffer import SnifferWorker
 
@@ -47,11 +48,12 @@ _STATUS_STYLE: dict[State, str] = {
 
 
 class StatusHeader(Static):
-    """Custom header showing the title and dongle status."""
+    """Custom header showing the title, dongle status, and active filter."""
 
     status: reactive[State] = reactive(State.IDLE)
     fake_mode: reactive[bool] = reactive(False)
     scanning: reactive[bool] = reactive(False)
+    filter_id: reactive[int | None] = reactive(None)
 
     def render(self) -> str:
         if self.scanning:
@@ -61,7 +63,10 @@ class StatusHeader(Static):
         if self.fake_mode and self.status is State.CONNECTED:
             text = f"{text}{_FAKE_SUFFIX}"
             style = "magenta"
-        return f"[b]{_TITLE}[/b] — [{style}]{text}[/{style}]"
+        base = f"[b]{_TITLE}[/b] — [{style}]{text}[/{style}]"
+        if self.filter_id is not None:
+            return f"{base}  [bold yellow][FILTER: 0x{self.filter_id:08X}][/bold yellow]"
+        return base
 
 
 class FallbackModal(ModalScreen[bool]):
@@ -144,6 +149,7 @@ class EnoceanTuiApp(App[int]):
 
     BINDINGS: ClassVar[list[Binding | tuple[str, str] | tuple[str, str, str]]] = [
         ("q", "quit", "Quit"),
+        ("f", "toggle_filter", "Filter"),
     ]
 
     def __init__(
@@ -170,6 +176,12 @@ class EnoceanTuiApp(App[int]):
         if self._dongle is not None:
             await self._dongle.aclose()
             self._dongle = None
+
+    def action_toggle_filter(self) -> None:
+        self.query_one(SnifferScreen).toggle_filter_input()
+
+    def on_filter_changed(self, message: FilterChanged) -> None:
+        self.query_one("#status-header", StatusHeader).filter_id = message.filter_id
 
     # ------------------------------------------------------------ internals
 

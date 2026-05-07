@@ -30,3 +30,11 @@ class PauseBufferUpdated(Message):
         super().__init__()
         self.queued: int = queued
         self.dropped: int = dropped
+
+
+class FilterChanged(Message):
+    """Posted by SnifferScreen when the active sender-ID filter changes."""
+
+    def __init__(self, filter_id: int | None) -> None:
+        super().__init__()
+        self.filter_id: int | None = filter_id
