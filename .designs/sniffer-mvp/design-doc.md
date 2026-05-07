@@ -1,7 +1,7 @@
 # Design: Phase 1 — Sniffer MVP
 
 **PRD:** `.prd-reviews/sniffer-mvp/prd-draft.md`
-**Status:** Alignment-reviewed (round 1: requirements + goals applied 2026-05-07; round 2: constraints + non-goals applied 2026-05-07; round 3: user-stories + open-questions applied 2026-05-07; completeness round 1: infrastructure + tests + error-handling applied 2026-05-07; sequencing round 1: task order + dependencies + critical path applied 2026-05-07)
+**Status:** Alignment-reviewed (round 1: requirements + goals applied 2026-05-07; round 2: constraints + non-goals applied 2026-05-07; round 3: user-stories + open-questions applied 2026-05-07; completeness round 1: infrastructure + tests + error-handling applied 2026-05-07; sequencing round 1: task order + dependencies + critical path applied 2026-05-07; risk + scope-creep round 2: risks mitigated + scope trimmed applied 2026-05-07)
 
 ---
 
@@ -58,6 +58,13 @@ class SnifferWorker:
     events (already wired in Phase 0) and re-enters the telegram iterator after
     a reconnect. The inner loop exits on DongleDisconnected; the outer loop
     resumes when the status event signals "connected".
+
+    Cancellation: only DongleDisconnected is caught — CancelledError must NOT
+    be caught, so Textual Worker shutdown propagates cleanly on app exit.
+
+    _wait_for_reconnect(): must await the Phase 0 DongleService reconnect
+    asyncio.Event (or equivalent state-change API), NOT busy-poll. Busy-polling
+    state in a sleep loop monopolises the event loop.
     """
 
     async def run(self) -> None:
@@ -70,7 +77,7 @@ class SnifferWorker:
                         self._app.post_message(TelegramReceived(telegram))
             except DongleDisconnected:
                 pass  # outer loop waits for reconnect event then retries
-            await self._wait_for_reconnect()  # returns once status == connected
+            await self._wait_for_reconnect()  # awaits Phase 0 state-change event; returns once status == connected
 ```
 
 Hot-path latency note: between `DongleService.telegrams()` yielding a telegram and
@@ -156,6 +163,9 @@ No changes to `DongleService`, `FakeDongle`, or `Settings` public APIs.
    - `async def run()`: iterates `DongleService.telegrams()`
    - Pause buffer (deque maxlen=256) + asyncio Event
    - Posts `TelegramReceived` to app
+   - `_wait_for_reconnect()`: **MUST await the Phase 0 DongleService reconnect event** (not
+     busy-poll); reference Phase 0 state-change API for the exact call. Ensure only
+     `DongleDisconnected` is caught; `CancelledError` must propagate for clean Worker shutdown.
 
 ### Phase 1-B: Sniffer screen / log display
 
@@ -166,6 +176,16 @@ No changes to `DongleService`, `FakeDongle`, or `Settings` public APIs.
    - RORG: name lookup + `f"{name} (0x{rorg_byte:02X})"`; use `RORG.name` from enum
    - Payload: `t.data.hex().upper()` (full hex, no truncation)
    - RSSI: `t.rssi_dbm` (property on `RawTelegram`, returns `int | None`; render as `"N/A"` when `None`)
+   - **Verify first:** confirm `RawTelegram.rssi_dbm` exists in the installed version of `enocean-async`.
+     If absent, derive via `(t.rssi if t.rssi != 0xFF else None)` and open a bead to add the property upstream.
+
+4.5. **Spike: RichLog batch-write performance** *(must precede task 5; close if ≤200 ms)*
+   Write a minimal Textual test app that calls `RichLog.write_markup()` 10 000 times in a
+   loop and measure wall time. If >200 ms, add a chunked flush helper:
+   write 100–200 entries then `await asyncio.sleep(0)` to yield control between chunks.
+   Document the result in a code comment in `screens/sniffer.py`. Only skip this spike if
+   prior measurement already exists.
+
 5. `src/enocean_async_tui/ui/screens/sniffer.py` — `SnifferScreen`
    - `RichLog(max_lines=10_000, wrap=False)`
    - `_buffer: deque[FormattedTelegram]` (`collections.deque(maxlen=10_000)`) for retroactive filter
@@ -210,17 +230,20 @@ No changes to `DongleService`, `FakeDongle`, or `Settings` public APIs.
 > concurrently once tasks 13 and 14 are done.
 
 15. If exactly one found: auto-connect
-16. If multiple found: present selection modal (user picks one dongle — this is
-    single-dongle selection, not simultaneous multi-dongle use; see §8 Non-Goals)
+16. If multiple found: **reuse the Phase 0 FakeDongle modal skeleton** for the dongle
+    selection dialog (single-dongle selection, not simultaneous multi-dongle use; see §8
+    Non-Goals). Do NOT build a new modal widget from scratch — extend the existing Phase 0
+    pattern. Alternative MVP simplification: auto-connect to the first dongle found and
+    display a non-blocking header warning (e.g., "Multiple dongles found; using
+    /dev/ttyUSB0 — rerun with --port to override").
 17. If none: existing FakeDongle modal flow (Phase 0). **Phase 1 fix:** when user
     accepts fake-dongle mode, initialise `FakeDongle` with the bundled demo recording
     (`tests/fixtures/recordings/burst-300.jsonl`, `realtime=True`) so Scenario C shows
     replayed telegrams immediately. Update `_handle_fallback()` in `app.py` to pass
     `recording=Path(__file__).parent.parent.parent / "tests/fixtures/recordings/burst-300.jsonl"`.
     **Path note:** `app.py` lives at `src/enocean_async_tui/app.py`; three `.parent` hops reach
-    the project root. This path works in a development checkout only. For installed-package
-    support, bundle the fixture under `src/enocean_async_tui/data/` and use
-    `importlib.resources.files("enocean_async_tui").joinpath("data/burst-300.jsonl")`.
+    the project root. This path works in a development checkout.
+    `# TODO: use importlib.resources for installed-package support (defer to Phase 2 packaging)`
 
 ---
 
@@ -320,8 +343,11 @@ No production code without a test that demanded it. Red → green → refactor.
 
 | Risk | Likelihood | Mitigation |
 |------|-----------|------------|
-| Retroactive filter re-render slow for 10K entries | Medium | Only re-render on Enter; `RichLog.clear()` + batch append is fast |
+| Retroactive filter re-render blocks event loop for 10K entries | Medium | Run spike (task 4.5) before implementation to measure batch-write latency. If >200 ms, flush in chunks of 100–200 with `await asyncio.sleep(0)` between batches. |
 | Pause buffer overflow misleads user | Low | Show dropped-count prominently in PAUSED banner |
 | FakeDongle replay timing differs from real dongle | Low | Tests use FakeDongle explicitly; real dongle integration is manual |
+| Textual Worker cancellation (`CancelledError`) suppressed by broad except | Low | Only catch `DongleDisconnected` in SnifferWorker retry loop; never bare `except` or `except Exception`; verified by `test_reconnect_resumes_streaming` |
 | Textual Worker lifecycle vs asyncio Event interaction | Medium | Use `asyncio.Event` (not `threading.Event`); same event loop |
+| `_wait_for_reconnect()` busy-polls state | Medium | Must await Phase 0 DongleService reconnect event (asyncio.Event or equivalent), NOT poll. Specified in task 3. |
+| `RawTelegram.rssi_dbm` property absent in installed enocean-async version | Low | Verify in task 4 before writing formatter; fallback derivation documented in task 4. |
 | Auto-discovery blocks event loop | High | `comports()` MUST run in `asyncio.to_thread`; tests mock the call to verify wrapping |
