@@ -85,6 +85,10 @@ class _RaisingDongle:
     def base_id(self) -> int | None:
         return None
 
+    @property
+    def port(self) -> str | None:
+        return None
+
     async def connect(self) -> None:
         self.connect_called += 1
         raise ConnectionError("no port")
@@ -298,3 +302,30 @@ def test_status_header_renders_hex_when_base_id_set() -> None:
     header.base_id = 0xFF800001
     rendered = header.render()
     assert "Base-ID: FF800001" in rendered
+
+
+async def test_port_label_updates_on_reconnect() -> None:
+    """State worker updates header.port when dongle transitions to CONNECTED on reconnect."""
+    settings = Settings(port="/dev/ttyUSB0", log_level="INFO", fake=False, max_lines=DEFAULT_MAX_LINES)
+    fake = FakeDongle()
+    app = EnoceanTuiApp(settings, dongle_factory=lambda: fake)
+
+    async with app.run_test() as pilot:
+        for _ in range(20):
+            if pilot.app.query_one("#status-header", StatusHeader).status is State.CONNECTED:
+                break
+            await pilot.pause()
+
+        pilot.app.query_one("#status-header", StatusHeader).port = None
+
+        await fake.simulate_disconnect()
+
+        for _ in range(60):
+            await pilot.pause()
+            h = pilot.app.query_one("#status-header", StatusHeader)
+            if h.status is State.CONNECTED:
+                break
+
+        h = pilot.app.query_one("#status-header", StatusHeader)
+        assert h.status is State.CONNECTED
+        assert h.port == "/dev/ttyUSB0"

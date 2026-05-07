@@ -206,7 +206,7 @@ class EnoceanTuiApp(App[int]):
             return
         self._dongle = dongle
         self._update_fake_suffix(port=port)
-        self._start_workers(dongle)
+        self._start_workers(dongle, active_port=port)
 
     async def _run_autodiscovery(self) -> None:
         header = self.query_one("#status-header", StatusHeader)
@@ -245,7 +245,7 @@ class EnoceanTuiApp(App[int]):
         header.demo_mode = self._demo_mode
         header.port = port
 
-    def _start_workers(self, dongle: Dongle) -> None:
+    def _start_workers(self, dongle: Dongle, *, active_port: str | None = None) -> None:
         header = self.query_one("#status-header", StatusHeader)
         header.status = dongle.state
         header.base_id = dongle.base_id
@@ -258,6 +258,7 @@ class EnoceanTuiApp(App[int]):
                 header.status = change.new
                 if change.new is State.CONNECTED:
                     header.base_id = dongle.base_id
+                    header.port = active_port
                 elif change.new in (State.RECONNECTING, State.CLOSED):
                     header.base_id = None
 

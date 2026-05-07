@@ -88,6 +88,10 @@ class DongleService:
         raw = self._gateway.base_id
         return int(raw) if raw is not None else None
 
+    @property
+    def port(self) -> str | None:
+        return self._port
+
     async def connect(self) -> None:
         if self._closed:
             raise RuntimeError("DongleService is closed")
