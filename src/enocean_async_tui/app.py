@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import importlib.resources
 import logging
 from collections.abc import Callable
+from pathlib import Path
 from typing import ClassVar
 
 from textual.app import App, ComposeResult
@@ -253,7 +255,8 @@ class EnoceanTuiApp(App[int]):
         if not accepted:
             self.exit(return_code=2)
             return
-        fake = FakeDongle(realtime=True)
+        _fixture = importlib.resources.files("enocean_async_tui.fixtures").joinpath("burst-300.jsonl")
+        fake = FakeDongle(recording=Path(str(_fixture)), realtime=True)
         await fake.connect()
         self._dongle = fake
         self._fake_mode = True

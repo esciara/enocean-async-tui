@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import AsyncIterator
+from unittest.mock import patch
 
 import pytest
 
@@ -13,6 +14,7 @@ from enocean_async_tui.dongle import (
     StateChange,
 )
 from enocean_async_tui.settings import DEFAULT_MAX_LINES, Settings
+from enocean_async_tui.ui.screens.sniffer import SnifferScreen
 
 
 def _settings() -> Settings:
@@ -201,3 +203,30 @@ async def test_modal_continue_with_fake() -> None:
         header = pilot.app.query_one("#status-header", StatusHeader)
         assert header.fake_mode
         assert header.status is State.CONNECTED
+
+
+async def test_scenario_c_e2e() -> None:
+    """Scenario C: no dongle found → accept fake modal → fixture telegrams appear in sniffer."""
+    settings = Settings(port=None, log_level="INFO", fake=False, max_lines=DEFAULT_MAX_LINES)
+    app = EnoceanTuiApp(settings)
+    with patch("serial.tools.list_ports.comports", return_value=[]):
+        async with app.run_test() as pilot:
+            # Autodiscovery finds 0 ports → FallbackModal should appear.
+            for _ in range(40):
+                await pilot.pause()
+                if app.screen.__class__.__name__ == "FallbackModal":
+                    break
+            else:
+                pytest.fail("FallbackModal never appeared")
+
+            await pilot.click("#modal-fake")
+
+            # FakeDongle replays fixture; first telegram has t_offset_ms=0 so
+            # it arrives immediately. Wait for it to land in the sniffer buffer.
+            screen = pilot.app.query_one(SnifferScreen)
+            for _ in range(80):
+                await pilot.pause()
+                if screen._buffer:
+                    break
+
+            assert screen._buffer, "Expected replayed telegrams from bundled fixture in SnifferScreen"
