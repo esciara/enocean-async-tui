@@ -146,6 +146,44 @@ async def test_modal_quit_exits_app() -> None:
     assert app.return_code == 2
 
 
+async def test_header_content() -> None:
+    """Start with --port /dev/ttyUSB0, connect via FakeDongle → header shows port and base-ID '–'."""
+    settings = Settings(port="/dev/ttyUSB0", log_level="INFO", fake=False, max_lines=DEFAULT_MAX_LINES)
+    fake = FakeDongle(queue_size=1000)
+    app = EnoceanTuiApp(settings, dongle_factory=lambda: fake)
+
+    async with app.run_test() as pilot:
+        for _ in range(40):
+            header = pilot.app.query_one("#status-header", StatusHeader)
+            if header.status is State.CONNECTED:
+                break
+            await pilot.pause()
+
+        header = pilot.app.query_one("#status-header", StatusHeader)
+        assert header.status is State.CONNECTED
+        rendered = header.render()
+        assert "/dev/ttyUSB0" in rendered
+        assert "–" in rendered  # base-ID placeholder
+
+
+async def test_fake_dongle_header_indicator() -> None:
+    """Header shows 'DEMO (fake dongle)' when Settings.fake=True."""
+    settings = Settings(port=None, log_level="INFO", fake=True, max_lines=DEFAULT_MAX_LINES)
+    app = EnoceanTuiApp(settings)
+
+    async with app.run_test() as pilot:
+        for _ in range(40):
+            header = pilot.app.query_one("#status-header", StatusHeader)
+            if header.status is State.CONNECTED:
+                break
+            await pilot.pause()
+
+        header = pilot.app.query_one("#status-header", StatusHeader)
+        assert header.status is State.CONNECTED
+        rendered = header.render()
+        assert "DEMO (fake dongle)" in rendered
+
+
 async def test_modal_continue_with_fake() -> None:
     raising = _RaisingDongle()
     app = EnoceanTuiApp(_settings(), dongle_factory=lambda: raising)

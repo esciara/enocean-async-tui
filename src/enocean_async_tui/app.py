@@ -28,7 +28,6 @@ from enocean_async_tui.ui.workers.sniffer import SnifferWorker
 _LOGGER = logging.getLogger("enocean_async_tui.app")
 
 _TITLE = "EnOcean TUI"
-_FAKE_SUFFIX = " (fake-dongle mode)"
 
 _STATUS_TEXT: dict[State, str] = {
     State.IDLE: "connecting…",
@@ -48,11 +47,13 @@ _STATUS_STYLE: dict[State, str] = {
 
 
 class StatusHeader(Static):
-    """Custom header showing the title, dongle status, and active filter."""
+    """Custom header showing title, dongle status, port, base-ID, and filter state."""
 
     status: reactive[State] = reactive(State.IDLE)
     fake_mode: reactive[bool] = reactive(False)
+    demo_mode: reactive[bool] = reactive(False)
     scanning: reactive[bool] = reactive(False)
+    port: reactive[str | None] = reactive(None)
     filter_id: reactive[int | None] = reactive(None)
 
     def render(self) -> str:
@@ -60,13 +61,17 @@ class StatusHeader(Static):
             return f"[b]{_TITLE}[/b] — [yellow]Scanning for dongles…[/yellow]"
         text = _STATUS_TEXT[self.status]
         style = _STATUS_STYLE[self.status]
-        if self.fake_mode and self.status is State.CONNECTED:
-            text = f"{text}{_FAKE_SUFFIX}"
-            style = "magenta"
-        base = f"[b]{_TITLE}[/b] — [{style}]{text}[/{style}]"
+        if self.demo_mode and self.status is State.CONNECTED:
+            port_part = "[magenta]DEMO (fake dongle)[/magenta]"
+        else:
+            port_part = self.port or "–"
+        filter_part = ""
         if self.filter_id is not None:
-            return f"{base}  [bold yellow][FILTER: 0x{self.filter_id:08X}][/bold yellow]"
-        return base
+            filter_part = f"  [[b]FILTER: 0x{self.filter_id:08X}[/b]]"
+        return (
+            f"[b]{_TITLE}[/b] — [{style}]{text}[/{style}]"
+            f"  {port_part}  Base-ID: –{filter_part}"
+        )
 
 
 class FallbackModal(ModalScreen[bool]):
@@ -163,6 +168,7 @@ class EnoceanTuiApp(App[int]):
         self._dongle_factory = dongle_factory
         self._dongle: Dongle | None = None
         self._fake_mode: bool = False
+        self._demo_mode: bool = False
 
     def compose(self) -> ComposeResult:
         yield StatusHeader(id="status-header")
@@ -189,12 +195,22 @@ class EnoceanTuiApp(App[int]):
         if self._dongle_factory is not None:
             dongle = self._dongle_factory()
             self._fake_mode = isinstance(dongle, FakeDongle)
+            self._demo_mode = False
             await self._connect_and_start(dongle, self._settings.port)
+        elif self._settings.fake:
+            fake = FakeDongle(realtime=True)
+            await fake.connect()
+            self._dongle = fake
+            self._fake_mode = True
+            self._demo_mode = True
+            self._update_fake_suffix(port=None)
+            self._start_workers(fake)
         elif self._settings.port is None:
             await self._run_autodiscovery()
         else:
             dongle = DongleService(self._settings.port)
             self._fake_mode = False
+            self._demo_mode = False
             await self._connect_and_start(dongle, self._settings.port)
 
     async def _connect_and_start(self, dongle: Dongle, port: str | None) -> None:
@@ -206,7 +222,7 @@ class EnoceanTuiApp(App[int]):
             await self._handle_fallback(port)
             return
         self._dongle = dongle
-        self._update_fake_suffix()
+        self._update_fake_suffix(port=port)
         self._start_workers(dongle)
 
     async def _run_autodiscovery(self) -> None:
@@ -241,12 +257,18 @@ class EnoceanTuiApp(App[int]):
         await fake.connect()
         self._dongle = fake
         self._fake_mode = True
-        self._update_fake_suffix()
+        self._demo_mode = True
+        self._update_fake_suffix(port=None)
         self._start_workers(fake)
 
-    def _update_fake_suffix(self) -> None:
+    def _update_fake_suffix(self, *, port: str | None = None) -> None:
         header = self.query_one("#status-header", StatusHeader)
         header.fake_mode = self._fake_mode
+        header.demo_mode = self._demo_mode
+        header.port = port
+
+    def on_filter_changed(self, message: FilterChanged) -> None:
+        self.query_one("#status-header", StatusHeader).filter_id = message.filter_id
 
     def _start_workers(self, dongle: Dongle) -> None:
         header = self.query_one("#status-header", StatusHeader)

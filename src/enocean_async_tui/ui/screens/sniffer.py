@@ -122,6 +122,9 @@ class SnifferScreen(Screen[None]):
         self.query_one("#paused-banner", PausedBanner).display = False
         self.query_one("#filter-input", FilterInput).display = False
 
+    def watch_filter_id(self, filter_id: int | None) -> None:
+        self.post_message(FilterChanged(filter_id))
+
     def set_worker(self, worker: SnifferWorker) -> None:
         self._worker = worker
 
