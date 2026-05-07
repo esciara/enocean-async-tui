@@ -1,4 +1,4 @@
-"""Phase-0 Textual app shell."""
+"""Phase-1 Textual app shell."""
 
 from __future__ import annotations
 
@@ -20,6 +20,8 @@ from enocean_async_tui.dongle import (
     State,
 )
 from enocean_async_tui.settings import Settings
+from enocean_async_tui.ui.screens.sniffer import SnifferScreen
+from enocean_async_tui.ui.workers.sniffer import SnifferWorker
 
 _LOGGER = logging.getLogger("enocean_async_tui.app")
 
@@ -115,7 +117,7 @@ class EnoceanTuiApp(App[int]):
 
     def compose(self) -> ComposeResult:
         yield StatusHeader(id="status-header")
-        yield Label("Phase 0 — placeholder", id="main-pane")
+        yield SnifferScreen()
         yield Footer()
 
     def on_mount(self) -> None:
@@ -167,15 +169,12 @@ class EnoceanTuiApp(App[int]):
     def _start_workers(self, dongle: Dongle) -> None:
         header = self.query_one("#status-header", StatusHeader)
         header.status = dongle.state
+        screen = self.query_one(SnifferScreen)
+        sniffer = SnifferWorker(dongle, screen)
 
         async def _state_worker() -> None:
             async for change in dongle.state_changes():
                 header.status = change.new
-
-        async def _telegrams_worker() -> None:
-            async for _telegram in dongle.telegrams():
-                # Phase 1+ will log this to a list view.
-                pass
 
         async def _warnings_worker() -> None:
             async for warning in dongle.warnings():
@@ -185,5 +184,5 @@ class EnoceanTuiApp(App[int]):
                 )
 
         self.run_worker(_state_worker(), name="state-worker", group="dongle-streams")
-        self.run_worker(_telegrams_worker(), name="telegrams-worker", group="dongle-streams")
+        self.run_worker(sniffer.run(), name="sniffer-worker", group="dongle-streams")
         self.run_worker(_warnings_worker(), name="warnings-worker", group="dongle-streams")

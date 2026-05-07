@@ -146,14 +146,15 @@ class SnifferWorker:
                     )
                     yield telegram
         finally:
-            if not tel_task.done():
-                tel_task.cancel()
+            # Cancel any still-pending tasks first.
+            for _task in (tel_task, sc_task):
+                if not _task.done():
+                    _task.cancel()
+            # Always retrieve results/exceptions so asyncio does not log
+            # "Task exception was never retrieved" warnings.
+            for _task in (tel_task, sc_task):
                 with contextlib.suppress(asyncio.CancelledError, Exception):
-                    await tel_task
-            if not sc_task.done():
-                sc_task.cancel()
-                with contextlib.suppress(asyncio.CancelledError, Exception):
-                    await sc_task
+                    await _task
 
     async def _wait_for_reconnect(self) -> None:
         """Block until the dongle reports CONNECTED; does not busy-poll."""
