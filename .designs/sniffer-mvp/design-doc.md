@@ -1,7 +1,7 @@
 # Design: Phase 1 — Sniffer MVP
 
 **PRD:** `.prd-reviews/sniffer-mvp/prd-draft.md`
-**Status:** Draft (synthesized from PRD + clarifications; pending alignment review)
+**Status:** Alignment-reviewed (round 1: requirements + goals applied 2026-05-07)
 
 ---
 
@@ -53,8 +53,30 @@ class SnifferWorker:
     re-enters normal iteration.
 
     'c' while paused: clears both the RichLog AND the deque.
+
+    Reconnect recovery: outer retry loop waits for DongleService state-change
+    events (already wired in Phase 0) and re-enters the telegram iterator after
+    a reconnect. The inner loop exits on DongleDisconnected; the outer loop
+    resumes when the status event signals "connected".
     """
+
+    async def run(self) -> None:
+        while not self._cancelled:
+            try:
+                async for telegram in self._service.telegrams():
+                    if self._paused:
+                        self._pause_buffer.append(telegram)
+                    else:
+                        self._app.post_message(TelegramReceived(telegram))
+            except DongleDisconnected:
+                pass  # outer loop waits for reconnect event then retries
+            await self._wait_for_reconnect()  # returns once status == connected
 ```
+
+Hot-path latency note: between `DongleService.telegrams()` yielding a telegram and
+`RichLog.write_markup()` executing, there is exactly one `app.post_message()` call —
+all within the same asyncio event loop. No off-loop threads, queues, or I/O are in
+this path. Display latency is bounded by the Textual frame rate (≤16 ms at 60 fps).
 
 Posts `TelegramReceived(telegram: RawTelegram)` Textual messages to App.
 
@@ -165,6 +187,16 @@ No changes to `DongleService`, `FakeDongle`, or `Settings` public APIs.
 
 ## 6. Test Plan
 
+**TDD requirement:** Every production code path must be preceded by a failing test.
+No production code without a test that demanded it. Red → green → refactor.
+
+**Quality gates (all must pass before merge):**
+- `uv run pytest` — all tests pass
+- `uv run mypy` (strict) — zero errors; all new types fully annotated
+- `uv run ruff check src tests` — zero lint errors
+- Coverage ≥ 80% — auto-discovery paths (§1-E) must have targeted tests using
+  mocked serial port scan; FakeDongle integration tests count toward coverage.
+
 ### Unit tests
 
 | Test | File | Key assertion |
@@ -173,6 +205,7 @@ No changes to `DongleService`, `FakeDongle`, or `Settings` public APIs.
 | `test_rorg_lookup` | `tests/unit/test_formatters.py` | All known RORGs produce correct name |
 | `test_pause_buffer_overflow` | `tests/unit/test_sniffer_worker.py` | 257th entry drops oldest, counter increments |
 | `test_clear_while_paused` | `tests/unit/test_sniffer_worker.py` | Both log buffer and pause buffer empty after clear |
+| `test_reconnect_resumes_streaming` | `tests/unit/test_sniffer_worker.py` | Worker re-enters telegram loop after DongleDisconnected + reconnect event |
 
 ### Integration tests (FakeDongle + Textual Pilot)
 
@@ -186,6 +219,7 @@ No changes to `DongleService`, `FakeDongle`, or `Settings` public APIs.
 | `test_filter_retroactive` | Replay 2 IDs, apply filter for ID-A | Only ID-A lines in RichLog |
 | `test_filter_enter` | Type partial ID, assert no change; press Enter | Log updates only on Enter |
 | `test_filter_clear` | Apply filter, press Escape | Full log re-renders |
+| `test_reconnect_streaming` | Stream 2, simulate disconnect, reconnect, stream 2 more | All 4 lines appear; no hang after reconnect |
 
 ---
 
