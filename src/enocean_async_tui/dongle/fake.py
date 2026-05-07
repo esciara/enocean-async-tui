@@ -128,6 +128,7 @@ class FakeDongle:
 
         self.sent = []
         self.send_response = SendResult(response=None, duration_ms=0.0)
+        self.base_id: int | None = None
 
     @property
     def state(self) -> State:

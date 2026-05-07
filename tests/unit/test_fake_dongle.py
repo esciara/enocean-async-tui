@@ -7,6 +7,17 @@ import pytest
 from enocean_async_tui.dongle.fake import FakeDongle, FixtureValidationError
 
 
+async def test_fake_dongle_base_id_default_none() -> None:
+    fake = FakeDongle()
+    assert fake.base_id is None
+
+
+async def test_fake_dongle_base_id_configurable() -> None:
+    fake = FakeDongle()
+    fake.base_id = 0x01234567
+    assert fake.base_id == 0x01234567
+
+
 @pytest.mark.parametrize(
     "line,match",
     [

@@ -57,6 +57,7 @@ class StatusHeader(Static):
     scanning: reactive[bool] = reactive(False)
     port: reactive[str | None] = reactive(None)
     filter_id: reactive[int | None] = reactive(None)
+    base_id: reactive[int | None] = reactive(None)
     multi_dongle_ports: reactive[tuple[str, ...]] = reactive(())
 
     def render(self) -> str:
@@ -71,13 +72,11 @@ class StatusHeader(Static):
             port_part = "[magenta]DEMO (fake dongle)[/magenta]"
         else:
             port_part = self.port or "–"
+        base_id_part = f"{self.base_id:08X}" if self.base_id is not None else "–"
         filter_part = ""
         if self.filter_id is not None:
             filter_part = f"  [[b]FILTER: 0x{self.filter_id:08X}[/b]]"
-        return (
-            f"[b]{_TITLE}[/b] — [{style}]{text}[/{style}]"
-            f"  {port_part}  Base-ID: –{filter_part}"
-        )
+        return f"[b]{_TITLE}[/b] — [{style}]{text}[/{style}]  {port_part}  Base-ID: {base_id_part}{filter_part}"
 
 
 class FallbackModal(ModalScreen[bool]):
@@ -249,6 +248,7 @@ class EnoceanTuiApp(App[int]):
     def _start_workers(self, dongle: Dongle) -> None:
         header = self.query_one("#status-header", StatusHeader)
         header.status = dongle.state
+        header.base_id = dongle.base_id
         screen = self.query_one(SnifferScreen)
         sniffer = SnifferWorker(dongle, screen)
         screen.set_worker(sniffer)
@@ -256,6 +256,10 @@ class EnoceanTuiApp(App[int]):
         async def _state_worker() -> None:
             async for change in dongle.state_changes():
                 header.status = change.new
+                if change.new is State.CONNECTED:
+                    header.base_id = dongle.base_id
+                elif change.new in (State.RECONNECTING, State.CLOSED):
+                    header.base_id = None
 
         async def _warnings_worker() -> None:
             async for warning in dongle.warnings():

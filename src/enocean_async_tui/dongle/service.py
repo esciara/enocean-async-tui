@@ -81,6 +81,13 @@ class DongleService:
     def state(self) -> State:
         return self._state
 
+    @property
+    def base_id(self) -> int | None:
+        if self._gateway is None:
+            return None
+        raw = self._gateway.base_id
+        return int(raw) if raw is not None else None
+
     async def connect(self) -> None:
         if self._closed:
             raise RuntimeError("DongleService is closed")

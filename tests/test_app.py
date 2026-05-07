@@ -81,6 +81,10 @@ class _RaisingDongle:
     def state(self) -> State:
         return self._state
 
+    @property
+    def base_id(self) -> int | None:
+        return None
+
     async def connect(self) -> None:
         self.connect_called += 1
         raise ConnectionError("no port")
@@ -278,3 +282,19 @@ async def test_file_not_found_modal_body_message() -> None:
         body = app.screen.query_one("#modal-body", Label)
         body_text = str(body.content)
         assert "Port not found" in body_text
+
+
+def test_status_header_renders_dash_when_base_id_none() -> None:
+    """StatusHeader renders '–' for base-ID when base_id reactive is None."""
+    header = StatusHeader()
+    header.base_id = None
+    rendered = header.render()
+    assert "Base-ID: –" in rendered
+
+
+def test_status_header_renders_hex_when_base_id_set() -> None:
+    """StatusHeader renders hex base-ID when base_id reactive is set."""
+    header = StatusHeader()
+    header.base_id = 0xFF800001
+    rendered = header.render()
+    assert "Base-ID: FF800001" in rendered

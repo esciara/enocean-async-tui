@@ -7,7 +7,7 @@ from typing import Any
 
 import pytest
 from enocean_async import Observable, Observation
-from enocean_async.address import EURID
+from enocean_async.address import EURID, BaseAddress
 from enocean_async.gateway import SendResult
 from enocean_async.protocol.erp1.rorg import RORG
 from enocean_async.protocol.erp1.telegram import ERP1Telegram
@@ -34,6 +34,7 @@ class FakeGateway:
         fail_times: int = 0,
         fail_with: type[Exception] | None = None,
         on_started: Callable[[FakeGateway], None] | None = None,
+        base_id: BaseAddress | None = None,
     ) -> None:
         self.port = port
         self._fail_times = fail_times
@@ -45,7 +46,12 @@ class FakeGateway:
         self.send_calls: list[ESP3Packet] = []
         self.send_response = SendResult(response=None, duration_ms=1.0)
         self._on_started = on_started
+        self._base_id = base_id
         FakeGateway.instances.append(self)
+
+    @property
+    def base_id(self) -> BaseAddress | None:
+        return self._base_id
 
     @property
     def is_connected(self) -> bool:
@@ -306,3 +312,37 @@ async def test_file_not_found_propagates(reset_fake_gateway_instances: None) -> 
     with pytest.raises(FileNotFoundError):
         await service.connect()
     await service.aclose()
+
+
+async def test_service_base_id_none_before_connect(reset_fake_gateway_instances: None) -> None:
+    service = DongleService("/dev/null", gateway_factory=_factory())
+    assert service.base_id is None
+
+
+async def test_service_base_id_none_when_gateway_returns_none(reset_fake_gateway_instances: None) -> None:
+    service = DongleService("/dev/null", gateway_factory=_factory())
+    await service.connect()
+    # FakeGateway has base_id=None by default
+    assert service.base_id is None
+    await service.aclose()
+
+
+async def test_service_base_id_reads_gateway_base_id_after_connect(
+    reset_fake_gateway_instances: None,
+) -> None:
+    expected = BaseAddress(0xFF800001)
+
+    def factory(port: str) -> FakeGateway:
+        return FakeGateway(port, base_id=expected)
+
+    service = DongleService("/dev/null", gateway_factory=factory)
+    await service.connect()
+    assert service.base_id == int(expected)
+    await service.aclose()
+
+
+async def test_service_base_id_none_after_aclose(reset_fake_gateway_instances: None) -> None:
+    service = DongleService("/dev/null", gateway_factory=_factory())
+    await service.connect()
+    await service.aclose()
+    assert service.base_id is None
