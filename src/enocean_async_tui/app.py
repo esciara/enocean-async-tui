@@ -232,9 +232,6 @@ class EnoceanTuiApp(App[int]):
         header.demo_mode = self._demo_mode
         header.port = port
 
-    def on_filter_changed(self, message: FilterChanged) -> None:
-        self.query_one("#status-header", StatusHeader).filter_id = message.filter_id
-
     def _start_workers(self, dongle: Dongle, *, active_port: str | None = None) -> None:
         header = self.query_one("#status-header", StatusHeader)
         header.status = dongle.state
