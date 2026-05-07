@@ -87,12 +87,15 @@ class FallbackModal(ModalScreen[bool]):
         ("escape", "quit", "Quit"),
     ]
 
-    def __init__(self, port: str | None) -> None:
+    def __init__(self, port: str | None, *, error_detail: str | None = None) -> None:
         super().__init__()
         self._port = port
+        self._error_detail = error_detail
 
     def compose(self) -> ComposeResult:
-        if self._port:
+        if self._error_detail is not None:
+            message = f"{self._error_detail}\nContinue in fake-dongle mode for testing?"
+        elif self._port:
             message = f"Couldn't open serial port {self._port}.\nContinue in fake-dongle mode for testing?"
         else:
             message = "No EnOcean dongle found.\nContinue in fake-dongle mode for testing?"
@@ -186,6 +189,17 @@ class EnoceanTuiApp(App[int]):
     async def _connect_and_start(self, dongle: Dongle, port: str | None) -> None:
         try:
             await dongle.connect()
+        except PermissionError:
+            _LOGGER.warning("dongle: permission denied on %s; offering fallback modal", port)
+            await dongle.aclose()
+            detail = f"Permission denied on {port} — check you are in the `dialout` group"
+            await self._handle_fallback(port, error_detail=detail)
+            return
+        except FileNotFoundError:
+            _LOGGER.warning("dongle: port not found %s; offering fallback modal", port)
+            await dongle.aclose()
+            await self._handle_fallback(port, error_detail=f"Port not found: {port}")
+            return
         except ConnectionError:
             _LOGGER.warning("dongle: connect raised; offering fallback modal")
             await dongle.aclose()
@@ -212,8 +226,8 @@ class EnoceanTuiApp(App[int]):
         else:
             header.multi_dongle_ports = tuple(ports)
 
-    async def _handle_fallback(self, port: str | None) -> None:
-        accepted = await self.push_screen_wait(FallbackModal(port))
+    async def _handle_fallback(self, port: str | None, *, error_detail: str | None = None) -> None:
+        accepted = await self.push_screen_wait(FallbackModal(port, error_detail=error_detail))
         if not accepted:
             self.exit(return_code=2)
             return
@@ -231,9 +245,6 @@ class EnoceanTuiApp(App[int]):
         header.fake_mode = self._fake_mode
         header.demo_mode = self._demo_mode
         header.port = port
-
-    def on_filter_changed(self, message: FilterChanged) -> None:
-        self.query_one("#status-header", StatusHeader).filter_id = message.filter_id
 
     def _start_workers(self, dongle: Dongle) -> None:
         header = self.query_one("#status-header", StatusHeader)

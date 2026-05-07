@@ -4,6 +4,7 @@ from collections.abc import AsyncIterator
 from unittest.mock import patch
 
 import pytest
+from textual.widgets import Label
 
 from enocean_async_tui.app import EnoceanTuiApp, StatusHeader
 from enocean_async_tui.dongle import (
@@ -99,6 +100,22 @@ class _RaisingDongle:
 
     def warnings(self) -> AsyncIterator[QueueOverflowWarning]:  # pragma: no cover - unused
         return _empty_warnings()
+
+
+class _PermissionDongle(_RaisingDongle):
+    """Stub `Dongle` that raises PermissionError on connect()."""
+
+    async def connect(self) -> None:
+        self.connect_called += 1
+        raise PermissionError("permission denied on /dev/null")
+
+
+class _FileNotFoundDongle(_RaisingDongle):
+    """Stub `Dongle` that raises FileNotFoundError on connect()."""
+
+    async def connect(self) -> None:
+        self.connect_called += 1
+        raise FileNotFoundError("no such port /dev/null")
 
 
 async def _empty_telegrams() -> AsyncIterator[RawTelegram]:  # pragma: no cover
@@ -230,3 +247,34 @@ async def test_scenario_c_e2e() -> None:
                     break
 
             assert screen._buffer, "Expected replayed telegrams from bundled fixture in SnifferScreen"
+
+
+async def test_permission_error_modal_body_message() -> None:
+    """PermissionError → FallbackModal body shows 'Permission denied' with dialout hint."""
+    perm = _PermissionDongle()
+    app = EnoceanTuiApp(_settings(), dongle_factory=lambda: perm)
+    async with app.run_test() as pilot:
+        for _ in range(40):
+            await pilot.pause()
+            if app.screen.__class__.__name__ == "FallbackModal":
+                break
+        assert app.screen.__class__.__name__ == "FallbackModal", "FallbackModal never appeared"
+        body = app.screen.query_one("#modal-body", Label)
+        body_text = str(body.content)
+        assert "Permission denied" in body_text
+        assert "dialout" in body_text
+
+
+async def test_file_not_found_modal_body_message() -> None:
+    """FileNotFoundError → FallbackModal body shows 'Port not found'."""
+    fnf = _FileNotFoundDongle()
+    app = EnoceanTuiApp(_settings(), dongle_factory=lambda: fnf)
+    async with app.run_test() as pilot:
+        for _ in range(40):
+            await pilot.pause()
+            if app.screen.__class__.__name__ == "FallbackModal":
+                break
+        assert app.screen.__class__.__name__ == "FallbackModal", "FallbackModal never appeared"
+        body = app.screen.query_one("#modal-body", Label)
+        body_text = str(body.content)
+        assert "Port not found" in body_text

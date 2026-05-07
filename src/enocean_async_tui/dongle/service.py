@@ -145,6 +145,18 @@ class DongleService:
         gateway.add_observation_callback(self._on_observation)
         try:
             await gateway.start(auto_reconnect=False)
+        except PermissionError:
+            _LOGGER.warning("dongle: permission denied on %s", self._port)
+            with contextlib.suppress(Exception):
+                gateway.stop()
+            self._gateway = None
+            raise
+        except FileNotFoundError:
+            _LOGGER.warning("dongle: port not found: %s", self._port)
+            with contextlib.suppress(Exception):
+                gateway.stop()
+            self._gateway = None
+            raise
         except (ConnectionError, OSError) as exc:
             _LOGGER.warning("dongle: connect failed: %s", exc)
             with contextlib.suppress(Exception):

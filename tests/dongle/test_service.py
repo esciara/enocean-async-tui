@@ -32,10 +32,12 @@ class FakeGateway:
         port: str,
         *,
         fail_times: int = 0,
+        fail_with: type[Exception] | None = None,
         on_started: Callable[[FakeGateway], None] | None = None,
     ) -> None:
         self.port = port
         self._fail_times = fail_times
+        self._fail_with: type[Exception] = fail_with or ConnectionError
         self._erp1_callbacks: list[Callable[[ERP1Telegram], None]] = []
         self._observation_callbacks: list[Callable[[Observation], None]] = []
         self._started = False
@@ -58,7 +60,7 @@ class FakeGateway:
     async def start(self, auto_reconnect: bool = True) -> None:
         if self._fail_times > 0:
             self._fail_times -= 1
-            raise ConnectionError(f"can't open {self.port}")
+            raise self._fail_with(f"can't open {self.port}")
         self._started = True
         if self._on_started is not None:
             self._on_started(self)
@@ -98,13 +100,17 @@ def reset_fake_gateway_instances() -> None:
     FakeGateway.instances.clear()
 
 
-def _factory(*, fail_times: int = 0) -> Callable[[str], FakeGateway]:
+def _factory(
+    *,
+    fail_times: int = 0,
+    fail_with: type[Exception] | None = None,
+) -> Callable[[str], FakeGateway]:
     counter = {"remaining": fail_times}
 
     def make(port: str) -> FakeGateway:
         ft = counter["remaining"]
         counter["remaining"] = 0  # only the first instance fails
-        return FakeGateway(port, fail_times=ft)
+        return FakeGateway(port, fail_times=ft, fail_with=fail_with)
 
     return make
 
@@ -284,3 +290,19 @@ async def test_async_context_manager(reset_fake_gateway_instances: None) -> None
     async with DongleService("/dev/null", gateway_factory=_factory()) as service:
         assert service.state is State.CONNECTED
     assert service.state is State.CLOSED
+
+
+async def test_permission_error_propagates(reset_fake_gateway_instances: None) -> None:
+    """PermissionError from gateway.start() must propagate out of connect() unchanged."""
+    service = DongleService("/dev/null", gateway_factory=_factory(fail_times=1, fail_with=PermissionError))
+    with pytest.raises(PermissionError):
+        await service.connect()
+    await service.aclose()
+
+
+async def test_file_not_found_propagates(reset_fake_gateway_instances: None) -> None:
+    """FileNotFoundError from gateway.start() must propagate out of connect() unchanged."""
+    service = DongleService("/dev/null", gateway_factory=_factory(fail_times=1, fail_with=FileNotFoundError))
+    with pytest.raises(FileNotFoundError):
+        await service.connect()
+    await service.aclose()
