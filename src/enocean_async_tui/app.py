@@ -74,10 +74,7 @@ class StatusHeader(Static):
         filter_part = ""
         if self.filter_id is not None:
             filter_part = f"  [[b]FILTER: 0x{self.filter_id:08X}[/b]]"
-        return (
-            f"[b]{_TITLE}[/b] — [{style}]{text}[/{style}]"
-            f"  {port_part}  Base-ID: –{filter_part}"
-        )
+        return f"[b]{_TITLE}[/b] — [{style}]{text}[/{style}]  {port_part}  Base-ID: –{filter_part}"
 
 
 class FallbackModal(ModalScreen[bool]):
