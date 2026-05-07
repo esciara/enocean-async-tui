@@ -80,6 +80,10 @@ class _RaisingDongle:
     def state(self) -> State:
         return self._state
 
+    @property
+    def port(self) -> str | None:
+        return None
+
     async def connect(self) -> None:
         self.connect_called += 1
         raise ConnectionError("no port")
@@ -230,3 +234,31 @@ async def test_scenario_c_e2e() -> None:
                     break
 
             assert screen._buffer, "Expected replayed telegrams from bundled fixture in SnifferScreen"
+
+
+async def test_port_label_updates_on_reconnect() -> None:
+    """State worker updates header.port when dongle transitions to CONNECTED on reconnect."""
+    settings = Settings(port="/dev/ttyUSB0", log_level="INFO", fake=False, max_lines=DEFAULT_MAX_LINES)
+    fake = FakeDongle()
+    app = EnoceanTuiApp(settings, dongle_factory=lambda: fake)
+
+    async with app.run_test() as pilot:
+        for _ in range(20):
+            if pilot.app.query_one("#status-header", StatusHeader).status is State.CONNECTED:
+                break
+            await pilot.pause()
+
+        # Manually clear port to prove the state-worker binding restores it on reconnect.
+        pilot.app.query_one("#status-header", StatusHeader).port = None
+
+        await fake.simulate_disconnect()
+
+        for _ in range(60):
+            await pilot.pause()
+            h = pilot.app.query_one("#status-header", StatusHeader)
+            if h.status is State.CONNECTED:
+                break
+
+        h = pilot.app.query_one("#status-header", StatusHeader)
+        assert h.status is State.CONNECTED
+        assert h.port == "/dev/ttyUSB0"

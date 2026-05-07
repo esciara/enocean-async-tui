@@ -81,6 +81,10 @@ class DongleService:
     def state(self) -> State:
         return self._state
 
+    @property
+    def port(self) -> str | None:
+        return self._port
+
     async def connect(self) -> None:
         if self._closed:
             raise RuntimeError("DongleService is closed")

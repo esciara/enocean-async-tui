@@ -193,7 +193,7 @@ class EnoceanTuiApp(App[int]):
             return
         self._dongle = dongle
         self._update_fake_suffix(port=port)
-        self._start_workers(dongle)
+        self._start_workers(dongle, active_port=port)
 
     async def _run_autodiscovery(self) -> None:
         header = self.query_one("#status-header", StatusHeader)
@@ -235,7 +235,7 @@ class EnoceanTuiApp(App[int]):
     def on_filter_changed(self, message: FilterChanged) -> None:
         self.query_one("#status-header", StatusHeader).filter_id = message.filter_id
 
-    def _start_workers(self, dongle: Dongle) -> None:
+    def _start_workers(self, dongle: Dongle, *, active_port: str | None = None) -> None:
         header = self.query_one("#status-header", StatusHeader)
         header.status = dongle.state
         screen = self.query_one(SnifferScreen)
@@ -245,6 +245,8 @@ class EnoceanTuiApp(App[int]):
         async def _state_worker() -> None:
             async for change in dongle.state_changes():
                 header.status = change.new
+                if change.new is State.CONNECTED:
+                    header.port = active_port
 
         async def _warnings_worker() -> None:
             async for warning in dongle.warnings():

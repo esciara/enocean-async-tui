@@ -133,6 +133,10 @@ class FakeDongle:
     def state(self) -> State:
         return self._state
 
+    @property
+    def port(self) -> str | None:
+        return None
+
     async def connect(self) -> None:
         if self._closed:
             raise RuntimeError("FakeDongle is closed")
