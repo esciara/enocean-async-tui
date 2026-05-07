@@ -1,7 +1,7 @@
 # Design: Phase 1 — Sniffer MVP
 
 **PRD:** `.prd-reviews/sniffer-mvp/prd-draft.md`
-**Status:** Alignment-reviewed (round 1: requirements + goals applied 2026-05-07; round 2: constraints + non-goals applied 2026-05-07)
+**Status:** Alignment-reviewed (round 1: requirements + goals applied 2026-05-07; round 2: constraints + non-goals applied 2026-05-07; round 3: user-stories + open-questions applied 2026-05-07)
 
 ---
 
@@ -100,11 +100,12 @@ class FormattedTelegram:
 - Applied **on Enter**, not live. Input shows "pending" visual state while typing.
 - Filter input accepts `0x` prefix (strips it before matching).
 - `f` again or `Escape` clears filter; full log re-renders.
+- **Live filtering:** when `filter_id` is set, new incoming `TelegramReceived` messages are also filtered — the handler skips non-matching entries without adding them to `_buffer` or `RichLog`.
 
 ### 3.4 Pause / Clear semantics
 
 - **Pause on** (`p`): `_paused = True`; new telegrams go to `_pause_buffer: deque[FormattedTelegram](maxlen=256)`.
-- **Overflow**: oldest entry silently dropped; `_dropped_count` incremented; header or banner shows "N dropped".
+- **Overflow**: oldest entry silently dropped; `_dropped_count` incremented; banner updates to show "N dropped" alongside the queued count.
 - **Clear while paused** (`c`): `RichLog.clear()` + `_pause_buffer.clear()` + `_buffer.clear()` + `_dropped_count = 0`.
 - **Clear while running** (`c`): `RichLog.clear()` + `_buffer.clear()`.
 - **Pause off** (`p`): flush `_pause_buffer` to `_buffer` and `RichLog` in order, then resume normal streaming.
@@ -168,8 +169,13 @@ No changes to `DongleService`, `FakeDongle`, or `Settings` public APIs.
 
 7. `q` binding → `app.exit()`
 8. `c` binding → `screen.clear_log()`
-9. `p` binding → `screen.toggle_pause()`
-10. `f` binding → show `FilterInput`; on Enter → apply filter; on Escape → clear filter
+9. `p` binding → `screen.toggle_pause()`; on pause-on, show inline PAUSED banner
+   (`Static` or `Label` widget overlaid on the log pane) reading
+   `"PAUSED — N queued"` (update count as buffer grows); append `" (N dropped)"` on
+   first overflow; hide banner on pause-off after flush.
+10. `f` binding → show `FilterInput`; while typing, apply a "pending" CSS class (e.g.
+    dim/italic) to signal the filter is not yet active; on Enter → remove pending style,
+    apply filter retroactively; on Escape → hide input, clear filter, re-render full log
 
 ### Phase 1-D: Header extension
 
@@ -187,7 +193,15 @@ No changes to `DongleService`, `FakeDongle`, or `Settings` public APIs.
 14. If exactly one found: auto-connect
 15. If multiple found: present selection modal (user picks one dongle — this is
     single-dongle selection, not simultaneous multi-dongle use; see §8 Non-Goals)
-16. If none: existing FakeDongle modal flow (Phase 0)
+16. If none: existing FakeDongle modal flow (Phase 0). **Phase 1 fix:** when user
+    accepts fake-dongle mode, initialise `FakeDongle` with the bundled demo recording
+    (`tests/fixtures/recordings/burst-300.jsonl`, `realtime=True`) so Scenario C shows
+    replayed telegrams immediately. Update `_handle_fallback()` in `app.py` to pass
+    `recording=Path(__file__).parent.parent / "tests/fixtures/recordings/burst-300.jsonl"`
+    (or resolve via importlib.resources for installed packages).
+17. Create `tests/fixtures/recordings/burst-300.jsonl` — 10–20 sample EnOcean telegrams
+    in FakeDongle replay format, covering at least 2 sender IDs and 2 RORG types (e.g.
+    RPS and 4BS), required for Scenario C demo and auto-discovery integration tests.
 
 ---
 
