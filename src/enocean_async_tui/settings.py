@@ -6,6 +6,7 @@ CLI flags > env vars > defaults. Pure: no I/O beyond reading the env mapping.
 from __future__ import annotations
 
 import argparse
+import logging
 import os
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
@@ -14,9 +15,11 @@ from typing import Literal
 LogLevel = Literal["DEBUG", "INFO", "WARNING", "ERROR"]
 
 _LOG_LEVELS: tuple[LogLevel, ...] = ("DEBUG", "INFO", "WARNING", "ERROR")
+_LOGGER = logging.getLogger(__name__)
 
 DEFAULT_PORT = "/dev/ttyUSB0"
 DEFAULT_LOG_LEVEL: LogLevel = "INFO"
+DEFAULT_MAX_LINES = 10_000
 
 ENV_PREFIX = "ENOCEAN_TUI_"
 
@@ -29,6 +32,8 @@ class SettingsError(ValueError):
 class Settings:
     port: str
     log_level: LogLevel
+    fake: bool
+    max_lines: int
 
     @classmethod
     def from_args(
@@ -46,12 +51,18 @@ class Settings:
 
         parser = argparse.ArgumentParser(prog="enocean-tui")
         parser.add_argument("--port", default=None)
+        parser.add_argument("--fake", action="store_true", default=False)
         parser.add_argument(
             "--log-level",
             choices=_LOG_LEVELS,
             default=None,
         )
         ns = parser.parse_args(argv)
+
+        fake: bool = ns.fake
+
+        if fake and ns.port is not None:
+            _LOGGER.warning("--port ignored because --fake was given")
 
         port = ns.port or environ.get(f"{ENV_PREFIX}PORT") or DEFAULT_PORT
 
@@ -69,4 +80,9 @@ class Settings:
                     f"Invalid {ENV_PREFIX}LOG_LEVEL={env_level!r}; expected one of {_LOG_LEVELS}",
                 )
 
-        return cls(port=port, log_level=log_level)
+        max_lines = DEFAULT_MAX_LINES
+        env_max_lines = environ.get(f"{ENV_PREFIX}MAX_LINES")
+        if env_max_lines:
+            max_lines = int(env_max_lines)
+
+        return cls(port=port, log_level=log_level, fake=fake, max_lines=max_lines)
