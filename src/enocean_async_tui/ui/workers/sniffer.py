@@ -14,7 +14,7 @@ from textual.message_pump import MessagePump
 
 from enocean_async_tui.dongle.protocol import Dongle, State, StateChange
 from enocean_async_tui.dongle.types import RawTelegram
-from enocean_async_tui.ui.messages import ParseWarning, TelegramReceived
+from enocean_async_tui.ui.messages import ParseWarning, PauseBufferUpdated, TelegramReceived
 
 if TYPE_CHECKING:
     pass
@@ -67,6 +67,7 @@ class SnifferWorker:
                             if len(self._pause_buffer) == self._pause_buffer.maxlen:
                                 self._dropped_count += 1
                             self._pause_buffer.append(telegram)
+                            self._app.post_message(PauseBufferUpdated(len(self._pause_buffer), self._dropped_count))
                         else:
                             self._app.post_message(TelegramReceived(telegram))
                     except asyncio.CancelledError:

@@ -11,15 +11,20 @@ from __future__ import annotations
 
 import asyncio
 from collections import deque
+from typing import TYPE_CHECKING, ClassVar
 
 from rich.markup import escape as markup_escape
 from textual.app import ComposeResult
+from textual.binding import Binding
 from textual.reactive import reactive
 from textual.screen import Screen
 from textual.widgets import Input, RichLog, Static
 
 from enocean_async_tui.ui.formatters import FormattedTelegram, format_telegram
-from enocean_async_tui.ui.messages import ParseWarning, TelegramReceived
+from enocean_async_tui.ui.messages import ParseWarning, PauseBufferUpdated, TelegramReceived
+
+if TYPE_CHECKING:
+    from enocean_async_tui.ui.workers.sniffer import SnifferWorker
 
 _CHUNK_SIZE = 100
 _MAX_LINES = 10_000
@@ -78,11 +83,19 @@ class SnifferScreen(Screen[None]):
     }
     """
 
+    BINDINGS: ClassVar[list[Binding | tuple[str, str] | tuple[str, str, str]]] = [
+        ("q", "quit", "Quit"),
+        ("c", "clear", "Clear"),
+        ("p", "toggle_pause", "Pause/Resume"),
+    ]
+
     filter_id: reactive[int | None] = reactive(None)
 
     def __init__(self) -> None:
         super().__init__()
         self._buffer: deque[FormattedTelegram] = deque(maxlen=_MAX_LINES)
+        self._worker: SnifferWorker | None = None
+        self._paused: bool = False
 
     def compose(self) -> ComposeResult:
         yield RichLog(id="sniffer-log", max_lines=_MAX_LINES, wrap=False, markup=True)
@@ -95,6 +108,53 @@ class SnifferScreen(Screen[None]):
     def on_mount(self) -> None:
         self.query_one("#paused-banner", PausedBanner).display = False
         self.query_one("#filter-input", FilterInput).display = False
+
+    def set_worker(self, worker: SnifferWorker) -> None:
+        self._worker = worker
+
+    def action_quit(self) -> None:
+        self.app.exit()
+
+    def action_clear(self) -> None:
+        self.clear_log()
+
+    def action_toggle_pause(self) -> None:
+        self.toggle_pause()
+
+    def clear_log(self) -> None:
+        """Clear the log, screen buffer, and (if paused) the worker's pause buffer."""
+        log = self.query_one("#sniffer-log", RichLog)
+        log.clear()
+        self._buffer.clear()
+        if self._paused and self._worker is not None:
+            self._worker.clear_buffer()
+            banner = self.query_one("#paused-banner", PausedBanner)
+            banner.queued = 0
+            banner.dropped = 0
+
+    def toggle_pause(self) -> None:
+        """Pause or resume the sniffer; show/hide the PAUSED banner."""
+        if self._worker is None:
+            return
+        banner = self.query_one("#paused-banner", PausedBanner)
+        if not self._paused:
+            self._paused = True
+            self._worker.pause()
+            banner.queued = 0
+            banner.dropped = 0
+            banner.display = True
+        else:
+            self._paused = False
+            self._worker.resume()
+            banner.display = False
+
+    def on_pause_buffer_updated(self, message: PauseBufferUpdated) -> None:
+        """Reflect current pause buffer size and overflow count in the banner."""
+        if not self._paused:
+            return
+        banner = self.query_one("#paused-banner", PausedBanner)
+        banner.queued = message.queued
+        banner.dropped = message.dropped
 
     def on_telegram_received(self, message: TelegramReceived) -> None:
         """Format incoming telegram, apply live filter, append to buffer and log."""

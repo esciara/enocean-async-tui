@@ -67,7 +67,7 @@ async def test_buffer_maxlen() -> None:
             screen._buffer.append(ft)
 
         assert len(screen._buffer) == 10_000
-        assert screen._buffer[0].sender_int == 1   # oldest (0) was dropped
+        assert screen._buffer[0].sender_int == 1  # oldest (0) was dropped
         assert screen._buffer[-1].sender_int == 10_000
 
 

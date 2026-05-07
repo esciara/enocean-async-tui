@@ -24,9 +24,7 @@ from enocean_async_tui.dongle.fake import FakeDongle, FixtureValidationError
         ('{"telegram_hex": "f600aabbcc0130", "t_offset_ms": 0, "rssi_dbm": "-60"}', "rssi_dbm"),
     ],
 )
-async def test_fixture_validation_malformed(
-    tmp_path: Path, line: str, match: str
-) -> None:
+async def test_fixture_validation_malformed(tmp_path: Path, line: str, match: str) -> None:
     fixture = tmp_path / "bad.jsonl"
     fixture.write_text(line + "\n", encoding="utf-8")
     fake = FakeDongle(recording=fixture)

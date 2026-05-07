@@ -13,7 +13,7 @@ from enocean_async_tui.dongle.fake import FAKE_RECONNECT_DELAY_S, FakeDongle
 from enocean_async_tui.dongle.protocol import State
 from enocean_async_tui.dongle.types import RawTelegram
 from enocean_async_tui.settings import DEFAULT_MAX_LINES, Settings
-from enocean_async_tui.ui.screens.sniffer import SnifferScreen
+from enocean_async_tui.ui.screens.sniffer import PausedBanner, SnifferScreen
 
 
 def _settings() -> Settings:
@@ -117,3 +117,193 @@ async def test_reconnect_streaming() -> None:
 
         # All 4 must be present — no hang after reconnect
         assert len(screen._buffer) == 4  # noqa: SLF001
+
+
+async def test_pause_resume() -> None:
+    """2 before pause, 2 more after, resume → 4 total; none lost (eat-1bn)."""
+    fake = FakeDongle(queue_size=1000)
+    app = EnoceanTuiApp(_settings(), dongle_factory=lambda: fake)
+
+    async with app.run_test() as pilot:
+        await _wait_connected(fake, pilot)
+        for _ in range(10):
+            await pilot.pause()
+
+        screen = app.query_one(SnifferScreen)
+
+        await fake.push_raw(_make_raw(0x11110001))
+        await fake.push_raw(_make_raw(0x22220002))
+        for _ in range(40):
+            await pilot.pause()
+            if len(screen._buffer) >= 2:  # noqa: SLF001
+                break
+        assert len(screen._buffer) == 2  # noqa: SLF001
+
+        await pilot.press("p")
+        for _ in range(10):
+            await pilot.pause()
+        assert screen._paused is True  # noqa: SLF001
+
+        await fake.push_raw(_make_raw(0x33330003))
+        await fake.push_raw(_make_raw(0x44440004))
+        assert screen._worker is not None  # noqa: SLF001
+        for _ in range(40):
+            await pilot.pause()
+            if len(screen._worker._pause_buffer) >= 2:  # noqa: SLF001
+                break
+        assert len(screen._worker._pause_buffer) == 2  # noqa: SLF001
+        assert len(screen._buffer) == 2  # noqa: SLF001
+
+        await pilot.press("p")
+        for _ in range(40):
+            await pilot.pause()
+            if len(screen._buffer) >= 4:  # noqa: SLF001
+                break
+        assert len(screen._buffer) == 4  # noqa: SLF001
+
+
+async def test_pause_overflow() -> None:
+    """Pause + 257 telegrams → 256 buffered; dropped counter = 1 (eat-1bn)."""
+    fake = FakeDongle(queue_size=1000)
+    app = EnoceanTuiApp(_settings(), dongle_factory=lambda: fake)
+
+    async with app.run_test() as pilot:
+        await _wait_connected(fake, pilot)
+        for _ in range(10):
+            await pilot.pause()
+
+        screen = app.query_one(SnifferScreen)
+
+        await pilot.press("p")
+        for _ in range(10):
+            await pilot.pause()
+        assert screen._paused is True  # noqa: SLF001
+
+        for i in range(257):
+            await fake.push_raw(_make_raw(0x10000000 + i))
+
+        assert screen._worker is not None  # noqa: SLF001
+        for _ in range(80):
+            await pilot.pause()
+            if screen._worker._dropped_count >= 1:  # noqa: SLF001
+                break
+
+        assert len(screen._worker._pause_buffer) == 256  # noqa: SLF001
+        assert screen._worker._dropped_count == 1  # noqa: SLF001
+
+
+async def test_pause_banner() -> None:
+    """Banner shows 'PAUSED — N queued'; '1 dropped' after overflow (eat-1bn)."""
+    fake = FakeDongle(queue_size=1000)
+    app = EnoceanTuiApp(_settings(), dongle_factory=lambda: fake)
+
+    async with app.run_test() as pilot:
+        await _wait_connected(fake, pilot)
+        for _ in range(10):
+            await pilot.pause()
+
+        screen = app.query_one(SnifferScreen)
+        banner = screen.query_one("#paused-banner", PausedBanner)
+
+        assert banner.display is False
+
+        await pilot.press("p")
+        for _ in range(10):
+            await pilot.pause()
+
+        assert banner.display is True
+        assert banner.queued == 0
+
+        for i in range(257):
+            await fake.push_raw(_make_raw(0x10000000 + i))
+
+        assert screen._worker is not None  # noqa: SLF001
+        for _ in range(80):
+            await pilot.pause()
+            if banner.dropped >= 1:
+                break
+
+        assert banner.queued == 256
+        assert banner.dropped == 1
+
+
+async def test_clear_running() -> None:
+    """Press c while running → log buffer empty (eat-1bn)."""
+    fake = FakeDongle(queue_size=1000)
+    app = EnoceanTuiApp(_settings(), dongle_factory=lambda: fake)
+
+    async with app.run_test() as pilot:
+        await _wait_connected(fake, pilot)
+        for _ in range(10):
+            await pilot.pause()
+
+        screen = app.query_one(SnifferScreen)
+
+        for sender in [0x11110001, 0x22220002, 0x33330003]:
+            await fake.push_raw(_make_raw(sender))
+        for _ in range(40):
+            await pilot.pause()
+            if len(screen._buffer) >= 3:  # noqa: SLF001
+                break
+        assert len(screen._buffer) == 3  # noqa: SLF001
+
+        await pilot.press("c")
+        for _ in range(10):
+            await pilot.pause()
+
+        assert len(screen._buffer) == 0  # noqa: SLF001
+
+
+async def test_clear_paused() -> None:
+    """Clear while paused → log empty after resume (eat-1bn)."""
+    fake = FakeDongle(queue_size=1000)
+    app = EnoceanTuiApp(_settings(), dongle_factory=lambda: fake)
+
+    async with app.run_test() as pilot:
+        await _wait_connected(fake, pilot)
+        for _ in range(10):
+            await pilot.pause()
+
+        screen = app.query_one(SnifferScreen)
+
+        await fake.push_raw(_make_raw(0x11110001))
+        for _ in range(40):
+            await pilot.pause()
+            if len(screen._buffer) >= 1:  # noqa: SLF001
+                break
+
+        await pilot.press("p")
+        for _ in range(10):
+            await pilot.pause()
+
+        for i in range(5):
+            await fake.push_raw(_make_raw(0x20000000 + i))
+        assert screen._worker is not None  # noqa: SLF001
+        for _ in range(40):
+            await pilot.pause()
+            if len(screen._worker._pause_buffer) >= 5:  # noqa: SLF001
+                break
+
+        await pilot.press("c")
+        for _ in range(10):
+            await pilot.pause()
+
+        await pilot.press("p")
+        for _ in range(20):
+            await pilot.pause()
+
+        assert len(screen._buffer) == 0  # noqa: SLF001
+
+
+async def test_quit_binding() -> None:
+    """Press q → app exits cleanly (eat-1bn)."""
+    fake = FakeDongle(queue_size=1000)
+    app = EnoceanTuiApp(_settings(), dongle_factory=lambda: fake)
+
+    async with app.run_test() as pilot:
+        await _wait_connected(fake, pilot)
+        for _ in range(5):
+            await pilot.pause()
+        await pilot.press("q")
+
+    assert app.return_code in (None, 0)

@@ -40,39 +40,25 @@ class FixtureValidationError(ValueError):
 def _validate_fixture_record(record: object, *, source: str, line_no: int) -> None:
     """Raise FixtureValidationError if *record* is missing required fields or has wrong types."""
     if not isinstance(record, dict):
-        raise FixtureValidationError(
-            f"{source}:{line_no}: expected JSON object, got {type(record).__name__}"
-        )
+        raise FixtureValidationError(f"{source}:{line_no}: expected JSON object, got {type(record).__name__}")
     # telegram_hex: str (required)
     th = record.get("telegram_hex")
     if th is None:
-        raise FixtureValidationError(
-            f"{source}:{line_no}: missing required field 'telegram_hex'"
-        )
+        raise FixtureValidationError(f"{source}:{line_no}: missing required field 'telegram_hex'")
     if not isinstance(th, str):
-        raise FixtureValidationError(
-            f"{source}:{line_no}: 'telegram_hex' must be str, got {type(th).__name__}"
-        )
+        raise FixtureValidationError(f"{source}:{line_no}: 'telegram_hex' must be str, got {type(th).__name__}")
     # t_offset_ms: int (required)
     tom = record.get("t_offset_ms")
     if tom is None:
-        raise FixtureValidationError(
-            f"{source}:{line_no}: missing required field 't_offset_ms'"
-        )
+        raise FixtureValidationError(f"{source}:{line_no}: missing required field 't_offset_ms'")
     if not isinstance(tom, int) or isinstance(tom, bool):
-        raise FixtureValidationError(
-            f"{source}:{line_no}: 't_offset_ms' must be int, got {type(tom).__name__}"
-        )
+        raise FixtureValidationError(f"{source}:{line_no}: 't_offset_ms' must be int, got {type(tom).__name__}")
     # rssi_dbm: int | null (required; value may be null)
     if "rssi_dbm" not in record:
-        raise FixtureValidationError(
-            f"{source}:{line_no}: missing required field 'rssi_dbm'"
-        )
+        raise FixtureValidationError(f"{source}:{line_no}: missing required field 'rssi_dbm'")
     rssi = record["rssi_dbm"]
     if rssi is not None and (not isinstance(rssi, int) or isinstance(rssi, bool)):
-        raise FixtureValidationError(
-            f"{source}:{line_no}: 'rssi_dbm' must be int or null, got {type(rssi).__name__}"
-        )
+        raise FixtureValidationError(f"{source}:{line_no}: 'rssi_dbm' must be int or null, got {type(rssi).__name__}")
 
 
 def _validate_fixture(path: Path) -> None:
@@ -85,10 +71,9 @@ def _validate_fixture(path: Path) -> None:
         try:
             record = json.loads(line)
         except json.JSONDecodeError as exc:
-            raise FixtureValidationError(
-                f"{source}:{line_no}: invalid JSON: {exc}"
-            ) from exc
+            raise FixtureValidationError(f"{source}:{line_no}: invalid JSON: {exc}") from exc
         _validate_fixture_record(record, source=source, line_no=line_no)
+
 
 # Synthetic backoff for the in-memory reconnect loop. Mirrors the real
 # service's `INITIAL_DELAY_S`. Module constant so tests can monkey-patch.

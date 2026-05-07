@@ -21,3 +21,12 @@ class ParseWarning(Message):
     def __init__(self, exc: Exception) -> None:
         super().__init__()
         self.exc: Exception = exc
+
+
+class PauseBufferUpdated(Message):
+    """Posted by SnifferWorker each time the pause buffer changes while paused."""
+
+    def __init__(self, queued: int, dropped: int) -> None:
+        super().__init__()
+        self.queued: int = queued
+        self.dropped: int = dropped

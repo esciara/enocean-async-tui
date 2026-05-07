@@ -121,10 +121,7 @@ async def test_reconnect_resumes_streaming() -> None:
     # Push telegram before disconnect
     await fake.push(_make_telegram(sender=0xAAAA0001))
     async with asyncio.timeout(1.0):
-        while not any(
-            isinstance(m, TelegramReceived) and int(m.telegram.sender) == 0xAAAA0001
-            for m in app.messages
-        ):
+        while not any(isinstance(m, TelegramReceived) and int(m.telegram.sender) == 0xAAAA0001 for m in app.messages):
             await asyncio.sleep(0.01)
 
     pre_disconnect_count = len(app.messages)
@@ -146,14 +143,12 @@ async def test_reconnect_resumes_streaming() -> None:
     # Push telegram after reconnect
     await fake.push(_make_telegram(sender=0xBBBB0002))
     async with asyncio.timeout(1.0):
-        while not any(
-            isinstance(m, TelegramReceived) and int(m.telegram.sender) == 0xBBBB0002
-            for m in app.messages
-        ):
+        while not any(isinstance(m, TelegramReceived) and int(m.telegram.sender) == 0xBBBB0002 for m in app.messages):
             await asyncio.sleep(0.01)
 
     post_reconnect_msgs = [
-        m for m in app.messages[pre_disconnect_count:]
+        m
+        for m in app.messages[pre_disconnect_count:]
         if isinstance(m, TelegramReceived) and int(m.telegram.sender) == 0xBBBB0002
     ]
     assert len(post_reconnect_msgs) >= 1
@@ -202,17 +197,11 @@ async def test_parse_error_continues() -> None:
     await fake.push(_make_telegram(sender=good_sender))
 
     async with asyncio.timeout(1.0):
-        while not any(
-            isinstance(m, TelegramReceived) and int(m.telegram.sender) == good_sender
-            for m in posted
-        ):
+        while not any(isinstance(m, TelegramReceived) and int(m.telegram.sender) == good_sender for m in posted):
             await asyncio.sleep(0.01)
 
     assert any(isinstance(m, ParseWarning) for m in posted)
-    assert any(
-        isinstance(m, TelegramReceived) and int(m.telegram.sender) == good_sender
-        for m in posted
-    )
+    assert any(isinstance(m, TelegramReceived) and int(m.telegram.sender) == good_sender for m in posted)
 
     task.cancel()
     with pytest.raises((asyncio.CancelledError, Exception)):

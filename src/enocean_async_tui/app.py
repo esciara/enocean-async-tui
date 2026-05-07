@@ -171,6 +171,7 @@ class EnoceanTuiApp(App[int]):
         header.status = dongle.state
         screen = self.query_one(SnifferScreen)
         sniffer = SnifferWorker(dongle, screen)
+        screen.set_worker(sniffer)
 
         async def _state_worker() -> None:
             async for change in dongle.state_changes():
