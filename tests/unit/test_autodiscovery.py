@@ -48,7 +48,7 @@ async def test_autodiscovery_single_dongle() -> None:
 
 
 async def test_autodiscovery_multiple_dongles() -> None:
-    """When multiple EnOcean dongles are found, the DongleSelectionModal is shown."""
+    """2 matching VID/PIDs → error notice requiring --port; NO selection modal shown."""
     with patch(
         "enocean_async_tui.app.discover_dongles",
         new_callable=AsyncMock,
@@ -58,9 +58,16 @@ async def test_autodiscovery_multiple_dongles() -> None:
         async with app.run_test() as pilot:
             for _ in range(40):
                 await pilot.pause()
-                if app.screen.__class__.__name__ == "DongleSelectionModal":
-                    return
-            pytest.fail("DongleSelectionModal never appeared")
+                header = pilot.app.query_one("#status-header", StatusHeader)
+                rendered = header.render()
+                if "/dev/ttyUSB0" in rendered and "--port" in rendered:
+                    break
+            header = pilot.app.query_one("#status-header", StatusHeader)
+            rendered = header.render()
+            assert "/dev/ttyUSB0" in rendered, f"port not in header: {rendered!r}"
+            assert "/dev/ttyACM0" in rendered, f"port not in header: {rendered!r}"
+            assert "--port" in rendered, f"--port hint not in header: {rendered!r}"
+            assert app.screen.__class__.__name__ != "DongleSelectionModal"
 
 
 async def test_autodiscovery_no_dongle() -> None:

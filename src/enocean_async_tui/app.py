@@ -57,8 +57,12 @@ class StatusHeader(Static):
     scanning: reactive[bool] = reactive(False)
     port: reactive[str | None] = reactive(None)
     filter_id: reactive[int | None] = reactive(None)
+    multi_dongle_ports: reactive[tuple[str, ...]] = reactive(())
 
     def render(self) -> str:
+        if self.multi_dongle_ports:
+            ports_str = ", ".join(self.multi_dongle_ports)
+            return f"[b]{_TITLE}[/b] — [red]Multiple dongles found: {ports_str} — use --port to specify one[/red]"
         if self.scanning:
             return f"[b]{_TITLE}[/b] — [yellow]Scanning for dongles…[/yellow]"
         text = _STATUS_TEXT[self.status]
@@ -113,42 +117,6 @@ class FallbackModal(ModalScreen[bool]):
 
     def action_quit(self) -> None:
         self.dismiss(False)
-
-
-class DongleSelectionModal(ModalScreen[str | None]):
-    """List discovered dongle ports; dismiss with the chosen port or None to quit."""
-
-    BINDINGS: ClassVar[list[Binding | tuple[str, str] | tuple[str, str, str]]] = [
-        ("escape", "quit", "Quit"),
-    ]
-
-    def __init__(self, ports: list[str]) -> None:
-        super().__init__()
-        self._ports = ports
-
-    def compose(self) -> ComposeResult:
-        port_buttons = [Button(p, id=f"port-{i}") for i, p in enumerate(self._ports)]
-        yield Vertical(
-            Label("Multiple EnOcean dongles found. Select one:", id="modal-title"),
-            *port_buttons,
-            Center(Button("Quit", id="modal-quit", variant="default")),
-            id="selection-modal",
-        )
-
-    def on_mount(self) -> None:
-        self.query_one("#port-0", Button).focus()
-
-    def on_button_pressed(self, event: Button.Pressed) -> None:
-        if event.button.id == "modal-quit":
-            self.dismiss(None)
-            return
-        for i, port in enumerate(self._ports):
-            if event.button.id == f"port-{i}":
-                self.dismiss(port)
-                return
-
-    def action_quit(self) -> None:
-        self.dismiss(None)
 
 
 class EnoceanTuiApp(App[int]):
@@ -242,13 +210,7 @@ class EnoceanTuiApp(App[int]):
             self._fake_mode = False
             await self._connect_and_start(dongle, ports[0])
         else:
-            selected = await self.push_screen_wait(DongleSelectionModal(ports))
-            if selected is None:
-                self.exit(return_code=2)
-                return
-            dongle = DongleService(selected)
-            self._fake_mode = False
-            await self._connect_and_start(dongle, selected)
+            header.multi_dongle_ports = tuple(ports)
 
     async def _handle_fallback(self, port: str | None) -> None:
         accepted = await self.push_screen_wait(FallbackModal(port))
