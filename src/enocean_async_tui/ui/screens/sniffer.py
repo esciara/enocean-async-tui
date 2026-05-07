@@ -6,6 +6,7 @@ Performance note (task 4.5 spike, 2026-05-07):
   Use batch_write() for all bulk writes (e.g. filter re-renders) to keep the
   event loop responsive.
 """
+
 from __future__ import annotations
 
 import asyncio

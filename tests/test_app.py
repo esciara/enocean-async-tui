@@ -12,11 +12,11 @@ from enocean_async_tui.dongle import (
     State,
     StateChange,
 )
-from enocean_async_tui.settings import Settings
+from enocean_async_tui.settings import DEFAULT_MAX_LINES, Settings
 
 
 def _settings() -> Settings:
-    return Settings(port="/dev/null", log_level="INFO")
+    return Settings(port="/dev/null", log_level="INFO", fake=False, max_lines=DEFAULT_MAX_LINES)
 
 
 async def test_app_starts_with_fake_shows_connected_fake_mode() -> None:

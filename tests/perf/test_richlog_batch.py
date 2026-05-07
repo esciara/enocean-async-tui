@@ -5,6 +5,7 @@ Spike result (2026-05-07, Apple M-series):
   batch_write() (chunk=100, asyncio.sleep(0) between chunks) prevents event-loop
   stalling for retroactive filter re-renders in SnifferScreen.
 """
+
 from __future__ import annotations
 
 import time
