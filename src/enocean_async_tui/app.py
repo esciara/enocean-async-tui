@@ -75,7 +75,7 @@ class StatusHeader(Static):
         base_id_part = f"{self.base_id:08X}" if self.base_id is not None else "–"
         filter_part = ""
         if self.filter_id is not None:
-            filter_part = f"  [[b]FILTER: 0x{self.filter_id:08X}[/b]]"
+            filter_part = f"  [b][[FILTER: 0x{self.filter_id:08X}]][/b]"
         return f"[b]{_TITLE}[/b] — [{style}]{text}[/{style}]  {port_part}  Base-ID: {base_id_part}{filter_part}"
 
 
